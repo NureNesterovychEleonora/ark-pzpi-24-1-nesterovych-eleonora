@@ -1,1 +1,1573 @@
+МІНІСТЕРСТВО ОСВІТИ І НАУКИ УКРАЇНИ
+ХАРКІВСЬКИЙ НАЦІОНАЛЬНИЙ УНІВЕРСИТЕТ РАДІОЕЛЕКТРОНІКИ
+КАФЕДРА ПРОГРАМНОЇ ІНЖЕНЕРІЇ
 
+
+
+
+
+
+ЗВІТ З ЛАБОРАТОРНОЇ РОБОТИ №2
+Дисципліна: Аналіз та рефакторинг коду програмного забезпечення
+Тема: Розробка бази даних для серверної частини системи та прикладного програмного інтерфейсу (API)
+
+
+
+
+
+Звіт склала:
+ст. гр. ПЗПІ-24-1
+Нестерович Елеонора Романівна	Перевірив:
+асистент кафедри ПІ, доктор філософії
+Дашенков Д. С.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Харків - 2026
+
+1. Мета роботи
+Ознайомитися з процесом розроблення серверної частини програмної системи: спроєктувати базу даних (БД), розробити прикладний програмний інтерфейс (API) для взаємодії з клієнтами та перевірити їхню спільну роботу. Набути навичок побудови UML-діаграм та ER-діаграм, розроблення БД, програмної реалізації API, а також роботи з репозиторіями Git і створення технічної документації.
+
+2. Завдання
+Для програмної системи «Програмна система для керування ресурсами навчального житлового модуля» (HabiCore) виконати такі завдання:
+    • сформулювати архітектурні рішення для серверної частини, клієнтських взаємодій та БД, описати моделі та зв’язки між ними;
+    • створити UML-діаграму прецедентів і ER-діаграму даних;
+    • спроєктувати таблиці БД, описати нормалізацію (1НФ, 2НФ, 3НФ) і створити діаграму структури БД;
+    • розробити функції роботи з БД засобами ORM з підтримкою операцій CRUD для основних сутностей;
+    • обрати тип API, описати ендпоінти, створити специфікацію API та програмну реалізацію;
+    • перевірити взаємодію API з БД і підготувати автоматизовані тести серверної частини;
+    • оформити звіт, завантажити його у форматі PDF на платформу dl.nure.ua, а текстову версію звіту та код - у репозиторій GitHub.
+
+3. Опис виконаної роботи
+Роботу виконано відповідно до документа Vision & Scope [1]. Репозиторій проєкту розміщено на платформі GitHub: https://github.com/NureNesterovychEleonora/arkpz-pzpi-24-1-nesterovych-eleonora
+
+3.1 Архітектура серверної частини
+Серверна частина системи HabiCore реалізована як монолітний Web API. Вона є єдиною точкою доступу до даних для веб-клієнта, мобільного застосунку на Android та IoT-пристрою. Архітектура складається з трьох шарів:
+    • шар маршрутизації HTTP (каталог src/routes): приймає запити, перевіряє права доступу та формує відповіді;
+    • шар доступу до даних: моделі ORM Sequelize, описані у файлі src/models.js (додаток А);
+    • шар зберігання: файл БД SQLite.
+
+Наскрізну функціональність винесено в окремі модулі: автентифікацію та перевірку ролей, обробку помилок і журнал дій (додаток Г). Типові операції створення, читання, оновлення та видалення (CRUD) реалізовано один раз у універсальному генераторі маршрутів src/crud.js (додаток Б) та підключено до всіх сутностей, що зменшує дублювання коду. Специфічні правила (наприклад, перевірка перетину бронювань) задаються параметрами генератора у модулях маршрутів (додаток В).
+Веб-клієнт і мобільний застосунок надсилають запити із заголовком Authorization: Bearer <токен JWT>, де токен видається користувачеві під час входу; IoT-пристрій автентифікується власним ключем у заголовку X-Device-Key. Усі дані передаються у форматі JSON.
+
+3.2 Вибір технологій
+Мову JavaScript (Node.js) і фреймворк Express обрано з урахуванням документа Vision & Scope [1, 3]: вони забезпечують просту маршрутизацію запитів і єдину мову розроблення для всієї серверної частини. Для роботи з БД використано ORM Sequelize [2], яка відображає таблиці на моделі, перевіряє дані перед записом і підтримує зовнішні ключі. СУБД SQLite [5] обрано, оскільки БД зберігається в одному файлі, не потребує окремого сервера та підходить для розгортання в одному контейнері.
+Автентифікація виконується за допомогою JSON Web Token [7], паролі зберігаються лише у вигляді хешів bcrypt. Специфікація API формується у форматі OpenAPI 3 [4] та відображається засобом Swagger UI. Тестування виконується вбудованим засобом Node.js node:test [6].
+
+3.3 Моделі та зв’язки між ними
+У системі визначено дев’ять моделей (таблиць):
+    • User (users) - користувач із роллю resident (мешканець) або admin (адміністратор) і ознакою блокування;
+    • Room (rooms) - кімната з ресурсними лімітами (вода та світло на бронювання, допустимий діапазон температури), ключем пристрою та токеном QR-коду;
+    • Booking (bookings) - бронювання кімнати користувачем зі статусом created, active, completed або cancelled;
+    • Measurement (measurements) - вимірювання рівня води, освітленості та температури від пристрою кімнати, яке може бути прив’язане до активного бронювання;
+    • DailyAggregate (daily_aggregates) - добові агрегати вимірювань кімнати;
+    • LimitViolation (limit_violations) - зафіксоване перевищення ліміту з поясненням і джерелом пояснення (llm або template);
+    • Inspection (inspections) - огляд кімнати під час поселення (checkin) або виселення (checkout) зі станом ok чи issues та необов’язковою приміткою;
+    • ServiceRequest (service_requests) - сервісна заявка з описом, посиланням на фото та статусом new, in_progress, resolved;
+    • ActionLog (action_logs) - журнал дій користувачів.
+
+Усі зв’язки між моделями мають тип «один-до-багатьох»: користувач і кімната мають багато бронювань і сервісних заявок; кімната має багато вимірювань, добових агрегатів і перевищень; бронювання має багато вимірювань і перевищень та не більше двох оглядів (по одному кожного типу); користувач виконує багато дій у журналі. Правила видалення задано явно: для бронювань і заявок - RESTRICT (запис, на який є посилання, видалити не можна), для вимірювань, агрегатів і перевищень кімнати та оглядів бронювання - CASCADE, для необов’язкових посилань - SET NULL.
+
+3.4 UML-діаграма прецедентів
+Діаграму прецедентів серверної частини наведено на рисунку Е.1 (додаток Е). Актори системи: мешканець, адміністратор та IoT-пристрій; адміністратор успадковує всі прецеденти мешканця. Мешканець реєструється й авторизується, переглядає каталог кімнат і бронювання за обраний день, створює бронювання (з обов’язковою перевіркою перетину), скасовує власні бронювання, записує огляди кімнат, створює сервісні заявки (фото додається за потреби) та переглядає вимірювання, добові агрегати й перевищення лімітів. Адміністратор керує кімнатами та їхніми лімітами, користувачами (зокрема блокує їх), бронюваннями, добовими агрегатами та записами про перевищення, опрацьовує заявки зі зміною статусу, видаляє вимірювання й переглядає журнал дій. IoT-пристрій надсилає вимірювання; сервер перевіряє ключ пристрою та прив’язує вимірювання до активного бронювання кімнати.
+
+3.5 ER-діаграма даних
+ER-діаграму наведено на рисунку 1. Вона містить сутності «Користувачі», «Кімнати», «Бронювання», «Вимірювання», «Добові_агрегати», «Перевищення_лімітів», «Огляди», «Сервісні_заявки» та «Журнал_дій», їхні атрибути та зв’язки «один-до-багатьох». Кожна сутність має сурогатний первинний ключ вигляду «кімната_id»; зовнішні ключі на ER-діаграмі не показано, їх утворюють зв’язки. Кружком позначено необов’язкові зв’язки: вимірювання та перевищення можуть не мати бронювання, запис журналу може не мати користувача.
+
+
+Рисунок 1 - ER-діаграма даних (рисунок виконано самостійно)
+
+Перехід від сутностей ER-діаграми до таблиць БД описано в підрозділі 3.6.
+
+3.6 Проєктування бази даних
+На основі ER-діаграми спроєктовано таблиці БД, призначення яких і основні обмеження наведено в таблиці 1. Кожна таблиця має сурогатний первинний ключ id (INTEGER); крім того, у всіх таблицях створюється службове поле createdAt, а в таблицях, окрім measurements і action_logs, - також поле updatedAt. Структуру таблиць, ключі та правила видалення показано на рисунках Ж.1 і Ж.2 (додаток Ж); типи полів наведено так, як їх створює Sequelize для SQLite.
+
+Таблиця 1 - Таблиці бази даних
+Таблиця	Призначення	Ключі та обмеження
+users	Користувачі та ролі	UNIQUE(email); role ∈ {resident, admin}
+rooms	Кімнати та ліміти ресурсів	UNIQUE(name), UNIQUE(deviceKey), UNIQUE(qrToken); tempMin < tempMax
+bookings	Бронювання кімнат	FK userId, roomId (RESTRICT); індекс (roomId, startTime)
+measurements	Архів вимірювань	FK roomId (CASCADE), bookingId (SET NULL); UNIQUE(roomId, measuredAt)
+daily_aggregates	Добові агрегати	FK roomId (CASCADE); UNIQUE(roomId, date)
+limit_violations	Перевищення лімітів	FK roomId (CASCADE), bookingId (SET NULL); індекс (roomId, detectedAt)
+inspections	Огляди кімнат	FK bookingId (CASCADE); UNIQUE(bookingId, type)
+service_requests	Сервісні заявки	FK userId, roomId (RESTRICT)
+action_logs	Журнал дій	FK userId (SET NULL)
+
+Додатково на рівні моделей задано перевірки: значення переліків (роль, статуси, тип ресурсу, тип і стан огляду) обмежено перевіркою isIn; рівень води має бути в межах 0-100, освітленість - 0-100000, температура - від -50 до 100; ліміти ресурсів не можуть бути від’ємними; довжина текстових полів не може перевищувати розмір відповідного стовпця (наприклад, ім’я - 100, опис заявки - 1000, пояснення перевищення - 600 символів); дата добового агрегату має мати формат РРРР-ММ-ДД.
+Відповідність назв сутностей і атрибутів ER-діаграми (рисунок 1) назвам таблиць і полів схеми БД наведено в таблиці 2. Первинні ключі всіх сутностей (виду «кімната_id») відповідають полю id відповідної таблиці.
+
+Таблиця 2 - Відповідність назв ER-діаграми та схеми БД
+ER-діаграма	Схема БД	ER-діаграма	Схема БД
+користувачі	users	рівень_води	waterLevel
+кімнати	rooms	освітленість	illuminance
+бронювання	bookings	температура	temperature
+вимірювання	measurements	дата	date
+добові_агрегати	daily_aggregates	температура_мін	tempMin
+перевищення_лімітів	limit_violations	температура_макс	tempMax
+огляди	inspections	температура_сер	tempAvg
+сервісні_заявки	service_requests	світло_мін	lightMin
+журнал_дій	action_logs	світло_макс	lightMax
+<сутність>_id	id	світло_сер	lightAvg
+ім’я	displayName	використано_води	waterUsed
+електронна_адреса	email	використано_світла	lightUsage
+хеш_пароля	passwordHash	ресурс	resource
+роль	role	значення_ліміту	limitValue
+ознака_блокування	isBlocked	фактичне_значення	actualValue
+назва	name	час_виявлення	detectedAt
+опис	description	пояснення	explanation
+ліміт_води	waterLimit	джерело_пояснення	explanationSource
+ліміт_світла	lightLimit	тип	type
+температура_від	tempMin	стан	state
+температура_до	tempMax	примітка	note
+ключ_пристрою	deviceKey	посилання_на_фото	photoUrl
+токен_QR	qrToken	коментар_адміністратора	adminComment
+початок	startTime	дія	action
+завершення	endTime	сутність	entity
+статус	status	ідентифікатор_сутності	entityId
+причина_скасування	cancelReason	деталі	details
+час_вимірювання	measuredAt		
+
+Таким чином, кожному атрибуту ER-діаграми відповідає поле схеми БД, а зв’язки ER-діаграми реалізовано зовнішніми ключами userId, roomId і bookingId.
+
+3.7 Нормалізація даних
+Нормалізацію виконано на прикладі центральної бізнес-задачі системи - бронювання кімнат. Для неї побудовано універсальне відношення «Дані_бронювань», що містить атрибути бронювання, користувача, який його створив, і кімнати, що бронюється (рисунок 2). Первинним ключем відношення обрано сурогатний ключ бронювання_id, оскільки жоден природний атрибут не гарантує унікальності запису.
+Рисунок 2 - Універсальне відношення «Дані_бронювань» (рисунок виконано самостійно)
+
+Визначено функціональні залежності між атрибутами відношення (рисунок 3): усі атрибути функціонально залежать від бронювання_id; атрибути користувача (відображуване_ім’я, електронна_адреса, хеш_пароля, роль, ознака_блокування) визначаються значенням користувач_id, а атрибути кімнати (назва_кімнати, опис_кімнати, ліміти ресурсів, діапазон температури, ключ_пристрою, токен_QR) - значенням кімната_id. Види залежностей на рисунку розрізнено стилем ліній: суцільна лінія - залежність від первинного ключа, штрихова - від користувач_id, пунктирна - від кімната_id.
+
+
+Рисунок 3 - Функціональні залежності відношення «Дані_бронювань» (рисунок виконано самостійно)
+
+Першу нормальну форму (1НФ) дотримано: усі атрибути атомарні, кортежі й атрибути не впорядковані, повторюваних груп і масивів немає. Наприклад, діапазон температури кімнати зберігається двома окремими атрибутами (температура_від і температура_до), а не рядком «18-26».
+Другу нормальну форму (2НФ) дотримано: відношення має простий первинний ключ, тому всі неключові атрибути повністю функціонально залежать від ключа.
+Третю нормальну форму (3НФ) порушено: у відношенні є транзитивні залежності, наприклад {бронювання_id} → електронна_адреса, бо {бронювання_id} → користувач_id і {користувач_id} → електронна_адреса; аналогічно {бронювання_id} → ліміт_води, бо {бронювання_id} → кімната_id і {кімната_id} → ліміт_води. Через це відношення має аномалії: дані користувача й кімнати дублюються в кожному бронюванні (зміна ліміту кімнати потребує оновлення багатьох рядків), користувача чи кімнату не можна додати без бронювання, а видалення останнього бронювання знищує відомості про користувача й кімнату.
+Для усунення аномалій відношення розкладено на три: users (атрибути користувача), rooms (атрибути кімнати) та bookings, що посилається на них зовнішніми ключами userId і roomId. Усі три відношення перебувають у 3НФ, бо їхні неключові атрибути залежать лише від первинного ключа id (рисунок Ж.1). Ліміти ресурсів залежать лише від кімнати й зберігаються в rooms, тому відомості про кімнату в бронюваннях, вимірюваннях і заявках не дублюються.
+Решта таблиць (measurements, daily_aggregates, limit_violations, inspections, service_requests, action_logs) також перебувають у 3НФ: кожна має простий первинний ключ id, а неключові атрибути не залежать один від одного. Природні складені ключі (roomId, measuredAt), (roomId, date) і (bookingId, type) закріплено унікальними індексами. Поля limitValue та actualValue у таблиці limit_violations є зафіксованим історичним фактом перевищення (ліміт кімнати може згодом змінитися), тому не порушують 3НФ.
+
+3.8 Програмна реалізація доступу до БД (ORM)
+Для доступу до БД використано ORM Sequelize. Моделі й зв’язки описано у файлі src/models.js (додаток А): моделі визначаються викликом sequelize.define, а допоміжна функція link одночасно задає зв’язки hasMany і belongsTo з однаковим зовнішнім ключем та правилом видалення. Таблиці створюються методом sequelize.sync() під час запуску сервера.
+Операції CRUD для всіх сутностей реалізує генератор buildCrud (додаток Б). Для кожної сутності він створює маршрути: список із фільтрацією та посторінковим виведенням (findAndCountAll), отримання за ідентифікатором (findOne), створення (create), оновлення (update) і видалення (destroy). Параметри генератора - дозволені поля, фільтри, обмеження видимості та перевірки перед збереженням - задаються в модулях маршрутів. Помилки БД (порушення унікальності, зовнішнього ключа, перевірок моделей) перетворюються на коди HTTP 409 та 400 у спільному обробнику помилок (додаток Г).
+
+3.9 Розроблення API та його специфікація
+Обрано REST API у форматі JSON: ресурси ідентифікуються адресами URL, а операції відповідають методам HTTP (GET, POST, PUT, DELETE). REST простіше реалізувати й тестувати, його підтримують усі клієнти системи (браузер, Android, ESP32), а структура даних є фіксованою, тому гнучкі запити GraphQL чи двійковий протокол gRPC не потрібні. Автентифікація користувачів виконується за токеном JWT у заголовку Authorization, пристроїв - за заголовком X-Device-Key.
+Базова адреса API: http://localhost:3000/api. Повну специфікацію у форматі OpenAPI доступно за адресою /openapi.json, інтерактивну документацію (Swagger UI) - за адресою /api-docs. Ендпоінти наведено в таблиці 3. Для всіх ресурсів формат запитів і відповідей однаковий: список повертає об’єкт {total, limit, offset, items}, параметри limit (від 1 до 200) і offset (не менше 0) задають сторінку, некоректні значення повертають код 400; створення повертає код 201 і створений запис; видалення - код 204. Помилки повертаються у вигляді {"error": "...", "details": [...]}. Використовуються коди: 400 - некоректні дані, 401 - немає або недійсний токен, 403 - недостатньо прав чи обліковий запис заблоковано, 404 - запис не знайдено, 409 - конфлікт (дублікат, перетин бронювань, запис має залежні дані), 413 - занадто велике тіло запиту.
+
+Таблиця 3 - Ендпоінти API
+Метод і шлях	Доступ	Опис
+GET /api/health	усі	Перевірка стану сервера
+POST /api/auth/register	усі	Реєстрація мешканця: {email, password (від 6 символів), displayName}
+POST /api/auth/login	усі	Вхід: {email, password}; відповідь {token, user}
+GET /api/auth/me	автентифіковані	Поточний користувач
+GET, POST /api/users; GET, PUT, DELETE /api/users/{id}	адміністратор	Керування користувачами: email, displayName, role, isBlocked, password; фільтри role, isBlocked (true або false)
+GET /api/rooms, /api/rooms/{id}	автентифіковані	Каталог кімнат (deviceKey і qrToken бачить лише адміністратор)
+GET /api/rooms/{id}/bookings?date=РРРР-ММ-ДД	автентифіковані	Бронювання кімнати за обрану добу (київський час): початок, завершення, статус; мешканець не бачить даних інших користувачів
+POST /api/rooms; PUT, DELETE /api/rooms/{id}	адміністратор	Керування кімнатами та лімітами: name, description, waterLimit, lightLimit, tempMin, tempMax
+GET /api/bookings, /api/bookings/{id}	автентифіковані	Бронювання (мешканець бачить лише власні); фільтри roomId, userId, status, from, to
+POST /api/bookings	автентифіковані	Створення: {roomId, startTime, endTime}; перевіряються час, тривалість до 24 годин і перетин з іншими бронюваннями
+PUT /api/bookings/{id}	власник, адміністратор	Зміна часу; скасування {status: "cancelled", cancelReason} лише до початку бронювання; мешканець змінює лише бронювання зі статусом created
+DELETE /api/bookings/{id}	адміністратор	Видалення бронювання
+POST /api/measurements	пристрій (X-Device-Key)	Надсилання вимірювання: {measuredAt?, waterLevel, illuminance, temperature}
+GET /api/measurements, /api/measurements/{id}	автентифіковані	Архів вимірювань; фільтри roomId, bookingId, from, to
+DELETE /api/measurements/{id}	адміністратор	Видалення вимірювання
+GET /api/daily-aggregates, /{id}	автентифіковані	Добові агрегати; фільтри roomId, date
+POST, PUT, DELETE /api/daily-aggregates[/{id}]	адміністратор	Керування агрегатами
+GET /api/limit-violations, /{id}	автентифіковані	Перевищення лімітів; фільтри roomId, bookingId, resource
+POST, PUT, DELETE /api/limit-violations[/{id}]	адміністратор	Керування записами про перевищення
+GET /api/inspections, /{id}	автентифіковані	Огляди (мешканець бачить огляди власних бронювань)
+POST /api/inspections	власник бронювання, адміністратор	Створення: {bookingId, type, state, note}
+PUT, DELETE /api/inspections/{id}	адміністратор	Зміна та видалення огляду
+GET /api/service-requests, /{id}	автентифіковані	Заявки (мешканець бачить лише власні)
+POST /api/service-requests	автентифіковані	Створення: {roomId, description, photoUrl}; початковий статус new
+PUT, DELETE /api/service-requests/{id}	адміністратор	Зміна статусу {status, adminComment} і видалення
+GET /api/action-logs, /api/action-logs/{id}	адміністратор	Журнал дій (лише читання); фільтри userId, action, entity
+
+Приклад 1. Вхід у систему. Запит: POST /api/auth/login, тіло {"email": "admin@habicore.local", "password": "Admin123!"}. Відповідь 200: {"token": "<JWT>", "user": {"id": 1, "email": "admin@habicore.local", "displayName": "Адміністратор", "role": "admin", "isBlocked": false}}.
+Приклад 2. Створення бронювання. Запит: POST /api/bookings із заголовком Authorization, тіло {"roomId": 1, "startTime": "2030-01-01T10:00:00Z", "endTime": "2030-01-01T12:00:00Z"}. Відповідь 201: {"id": 1, "userId": 2, "roomId": 1, "startTime": "...", "endTime": "...", "status": "created"}. Повторний запит на перетинний час повертає код 409 і тіло {"error": "The room is already booked for this time"}.
+Приклад 3. Надсилання вимірювання пристроєм. Запит: POST /api/measurements із заголовком X-Device-Key: demo-device-key-room-1, тіло {"waterLevel": 70, "illuminance": 300, "temperature": 22}. Відповідь 201: {"id": 1, "roomId": 1, "bookingId": null, "measuredAt": "...", "waterLevel": 70, "illuminance": 300, "temperature": 22}. Якщо в момент вимірювання в кімнаті є активне бронювання, його ідентифікатор записується в поле bookingId.
+
+3.10 Програмна реалізація API
+Серверну частину реалізовано на Node.js з Express. Застосунок збирається у файлі src/app.js, який підключає маршрути ресурсів, документацію API та обробники помилок. Основні рішення:
+    • автентифікація та ролі: middleware перевіряє токен JWT, наявність користувача в БД і ознаку блокування, а потім роль (додаток Г); мешканець бачить і змінює лише власні бронювання, огляди та заявки, адміністратор має повний доступ;
+    • бронювання: перед збереженням перевіряються коректність часу, тривалість до 24 годин і відсутність перетину з іншими активними чи створеними бронюваннями тієї самої кімнати; перевірка та запис виконуються послідовно (черга Mutex, додаток Б), тому паралельні запити на один слот не можуть створити перетин; мешканець може скасувати лише власне бронювання і лише до його початку (додаток В);
+    • розклад кімнати: запит GET /api/rooms/{id}/bookings?date=РРРР-ММ-ДД повертає бронювання кімнати за обрану добу за київським часом; доба переводиться в межі UTC з урахуванням переходу на літній час (функція dayRange, додаток Б); мешканець отримує лише час початку, завершення та статус, без даних інших користувачів (додаток В);
+    • приймання вимірювань: пристрій автентифікується ключем, значення перевіряються на тип і допустимий діапазон, а вимірювання автоматично прив’язується до активного бронювання кімнати; дублікати за парою (кімната, час) відхиляються (додаток В);
+    • журнал дій: створення, оновлення та видалення записів, а також реєстрація й вхід фіксуються в таблиці action_logs;
+    • початкові дані: під час першого запуску створюються адміністратор, мешканець і демонстраційні кімнати з ключами пристроїв.
+
+Для запуску потрібно встановити Node.js версії 20 або новішої, виконати в каталозі проєкту команду npm install, а потім npm start. БД у файлі data/habicore.sqlite і всі таблиці створюються автоматично.
+
+3.11 Тестування
+Взаємодію API з БД і коректність окремих модулів перевірено автоматичними тестами (додаток Д), які запускаються командою npm test. Тести створюють порожню БД SQLite у пам’яті; інтеграційні тести запускають застосунок і надсилають реальні HTTP-запити, тому перевіряють усі шари одночасно. Набір складається з 83 тестів, розподілених за 12 файлами (таблиця 4).
+
+Таблиця 4 - Склад набору автоматичних тестів
+Файл тестів	Що перевіряється	Тестів
+utils.test.js	допоміжні функції: розбір дат і пагінації, межі доби за часовим поясом (включно з переходом на літній час), черга Mutex	10
+errors.test.js	перетворення помилок (власних, розбору JSON, ORM) на HTTP-відповіді; обгортка asyncHandler	5
+openapi.test.js	специфікація OpenAPI: посилання, теги, відповіді, приклади, вимоги авторизації, переліки значень	4
+models.test.js	моделі ORM: значення за замовчуванням, перевірки полів, унікальність, зовнішні ключі, правила видалення	6
+auth.api.test.js	реєстрація, вхід, токени JWT (підробка, строк дії, видалений і заблокований користувач), профіль	7
+users.api.test.js	керування користувачами: права, створення, зміна ролі й пароля, блокування, видалення, фільтри	6
+rooms.api.test.js	кімнати та ліміти, приховування ключів, пагінація, розклад кімнати за день, часовий пояс	9
+bookings.api.test.js	бронювання: перетини, тривалість, 20 паралельних запитів, права, скасування до початку, видалення	12
+measurements.api.test.js	приймання вимірювань від пристрою, межі значень, прив’язка до бронювання, архів і фільтри	8
+aggregates-violations.api.test.js	добові агрегати та перевищення лімітів: перевірка полів, унікальність, права, зв’язки	5
+inspections-requests.api.test.js	огляди кімнат і сервісні заявки: права, статуси, видимість чужих записів	5
+logs-integrity.api.test.js	журнал дій, обмеження цілісності БД, службові маршрути та обробка помилок	6
+Разом		83
+
+Тести охоплюють основні й граничні випадки: тривалість бронювання рівно 24 години та на хвилину більше, перетин інтервалів, права ролей, видимість чужих записів, каскадні правила видалення та одночасні запити (із 20 паралельних запитів на один слот успішним є лише один). Покриття коду можна оцінити командою npm run test:coverage.
+Результат виконання команди npm test (див. рисунок 4): 
+
+Рисунок 4 - Результат виконання автоматичних тестів
+
+Додатково API можна перевірити вручну засобами Swagger UI (адреса /api-docs), Postman або curl, а вміст БД переглянути у SQLite-переглядачі.
+
+4. Висновки
+У ході роботи спроєктовано БД серверної частини системи HabiCore, що складається з дев’яти таблиць і нормалізована до третьої нормальної форми, побудовано UML-діаграму прецедентів, ER-діаграму та діаграму структури БД. Розроблено REST API з автентифікацією за токеном JWT та розмежуванням ролей мешканця й адміністратора, реалізовано доступ до БД засобами ORM Sequelize з операціями CRUD для всіх основних сутностей, створено специфікацію API у форматі OpenAPI. Взаємодію API з БД перевірено автоматичними модульними та інтеграційними тестами (83 тести), які охоплюють основні сценарії API, права ролей, обмеження цілісності БД і одночасні запити на бронювання. Реалізація є основою для розроблення бізнес-логіки та адміністрування (лабораторна робота №3) та IoT-клієнта (лабораторна робота №4).
+
+5. Перелік джерел посилання
+1. Nesterovych E. Vision and Scope Document for HabiCore: Software System for Resource Management of a Training Habitat Module. Version 1.0. Kharkiv: KhNURE, 2026. 30.10.2026.
+2. Sequelize. Documentation (v6). URL: https://sequelize.org/docs/v6/ (дата звернення: 18.11.2026).
+3. Express. Documentation. URL: https://expressjs.com (дата звернення: 18.11.2026).
+4. OpenAPI Initiative. OpenAPI Specification 3.0.3. URL: https://spec.openapis.org/oas/v3.0.3 (дата звернення: 18.11.2026).
+5. SQLite. Documentation. URL: https://www.sqlite.org/docs.html (дата звернення: 18.11.2026).
+6. Node.js. Test runner. URL: https://nodejs.org/api/test.html (дата звернення: 18.11.2026).
+7. Jones M., Bradley J., Sakimura N. JSON Web Token (JWT): RFC 7519. URL: https://www.rfc-editor.org/rfc/rfc7519 (дата звернення: 18.11.2026).
+ДОДАТОК А
+Моделі даних і зв’язки між ними
+
+Файл src/models.js
+'use strict';
+
+const { DataTypes } = require('sequelize');
+
+// Допоміжні функції для правил валідації полів
+const isIn = (values) => ({ isIn: [values] });
+const maxLen = (n) => ({ len: [0, n] });
+
+// Описує всі таблиці бази даних та зв'язки між ними
+function initModels(sequelize) {
+  // ---------- Користувачі ----------
+  const User = sequelize.define('User', {
+    email: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+      unique: true,
+      validate: { isEmail: true, ...maxLen(255) },
+    },
+    passwordHash: { type: DataTypes.STRING(100), allowNull: false },
+    displayName: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      validate: { notEmpty: true, ...maxLen(100) },
+    },
+    role: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'resident',
+      validate: isIn(['resident', 'admin']),
+    },
+    isBlocked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  }, { tableName: 'users' });
+
+  // Хеш пароля ніколи не повертається клієнту
+  User.prototype.toJSON = function toJSON() {
+    const values = { ...this.get() };
+    delete values.passwordHash;
+    return values;
+  };
+
+  // ---------- Кімнати ----------
+  const Room = sequelize.define('Room', {
+    name: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      unique: true,
+      validate: { notEmpty: true, ...maxLen(100) },
+    },
+    description: { type: DataTypes.STRING(500), allowNull: true, validate: maxLen(500) },
+    waterLimit: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 100, validate: { min: 0 } },
+    lightLimit: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 100, validate: { min: 0 } },
+    tempMin: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 18 },
+    tempMax: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 26 },
+    deviceKey: {
+      type: DataTypes.STRING(64),
+      allowNull: false,
+      unique: true,
+      defaultValue: DataTypes.UUIDV4,
+    },
+    qrToken: {
+      type: DataTypes.STRING(64),
+      allowNull: false,
+      unique: true,
+      defaultValue: DataTypes.UUIDV4,
+    },
+  }, {
+    tableName: 'rooms',
+    validate: {
+      tempRange() {
+        if (this.tempMin >= this.tempMax) {
+          throw new Error('tempMin must be less than tempMax');
+        }
+      },
+    },
+  });
+
+  // ---------- Бронювання ----------
+  const Booking = sequelize.define('Booking', {
+    startTime: { type: DataTypes.DATE, allowNull: false },
+    endTime: { type: DataTypes.DATE, allowNull: false },
+    status: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'created',
+      validate: isIn(['created', 'active', 'completed', 'cancelled']),
+    },
+    cancelReason: { type: DataTypes.STRING(200), allowNull: true, validate: maxLen(200) },
+  }, {
+    tableName: 'bookings',
+    indexes: [{ fields: ['roomId', 'startTime'] }, { fields: ['userId'] }],
+  });
+
+  // ---------- Вимірювання датчиків ----------
+  const Measurement = sequelize.define('Measurement', {
+    measuredAt: { type: DataTypes.DATE, allowNull: false },
+    waterLevel: { type: DataTypes.FLOAT, allowNull: false, validate: { min: 0, max: 100 } },
+    illuminance: { type: DataTypes.FLOAT, allowNull: false, validate: { min: 0, max: 100000 } },
+    temperature: { type: DataTypes.FLOAT, allowNull: false, validate: { min: -50, max: 100 } },
+  }, {
+    tableName: 'measurements',
+    updatedAt: false,
+    indexes: [
+      { unique: true, fields: ['roomId', 'measuredAt'] },
+      { fields: ['bookingId'] },
+    ],
+  });
+
+  // ---------- Добові агрегати ----------
+  const DailyAggregate = sequelize.define('DailyAggregate', {
+    date: { type: DataTypes.DATEONLY, allowNull: false },
+    tempMin: { type: DataTypes.FLOAT, allowNull: false },
+    tempMax: { type: DataTypes.FLOAT, allowNull: false },
+    tempAvg: { type: DataTypes.FLOAT, allowNull: false },
+    lightMin: { type: DataTypes.FLOAT, allowNull: false },
+    lightMax: { type: DataTypes.FLOAT, allowNull: false },
+    lightAvg: { type: DataTypes.FLOAT, allowNull: false },
+    waterUsed: { type: DataTypes.FLOAT, allowNull: false, validate: { min: 0 } },
+    lightUsage: { type: DataTypes.FLOAT, allowNull: false, validate: { min: 0 } },
+  }, {
+    tableName: 'daily_aggregates',
+    indexes: [{ unique: true, fields: ['roomId', 'date'] }],
+  });
+
+  // ---------- Перевищення лімітів ----------
+  const LimitViolation = sequelize.define('LimitViolation', {
+    resource: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      validate: isIn(['water', 'light', 'temperature']),
+    },
+    limitValue: { type: DataTypes.FLOAT, allowNull: false },
+    actualValue: { type: DataTypes.FLOAT, allowNull: false },
+    detectedAt: { type: DataTypes.DATE, allowNull: false },
+    explanation: { type: DataTypes.STRING(600), allowNull: true, validate: maxLen(600) },
+    explanationSource: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+      validate: isIn(['llm', 'template']),
+    },
+  }, {
+    tableName: 'limit_violations',
+    indexes: [{ fields: ['roomId', 'detectedAt'] }],
+  });
+
+  // ---------- Огляди кімнат (заселення / виселення) ----------
+  const Inspection = sequelize.define('Inspection', {
+    type: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      validate: isIn(['checkin', 'checkout']),
+    },
+    state: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      validate: isIn(['ok', 'issues']),
+    },
+    note: { type: DataTypes.STRING(500), allowNull: true, validate: maxLen(500) },
+  }, {
+    tableName: 'inspections',
+    indexes: [{ unique: true, fields: ['bookingId', 'type'] }],
+  });
+
+  // ---------- Сервісні заявки ----------
+  const ServiceRequest = sequelize.define('ServiceRequest', {
+    description: {
+      type: DataTypes.STRING(1000),
+      allowNull: false,
+      validate: { notEmpty: true, ...maxLen(1000) },
+    },
+    photoUrl: { type: DataTypes.STRING(500), allowNull: true, validate: maxLen(500) },
+    status: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'new',
+      validate: isIn(['new', 'in_progress', 'resolved']),
+    },
+    adminComment: { type: DataTypes.STRING(500), allowNull: true, validate: maxLen(500) },
+  }, { tableName: 'service_requests' });
+
+  // ---------- Журнал дій ----------
+  const ActionLog = sequelize.define('ActionLog', {
+    action: { type: DataTypes.STRING(50), allowNull: false },
+    entity: { type: DataTypes.STRING(50), allowNull: false },
+    entityId: { type: DataTypes.INTEGER, allowNull: true },
+    details: { type: DataTypes.STRING(500), allowNull: true },
+  }, { tableName: 'action_logs', updatedAt: false });
+
+  // ---------- Зв'язки між таблицями ----------
+  // Parent має багато Child; foreignKey - поле в Child, onDelete - що робити при видаленні Parent
+  const link = (Parent, Child, foreignKeyName, allowNull, onDelete) => {
+    const foreignKey = { name: foreignKeyName, allowNull };
+    Parent.hasMany(Child, { foreignKey, onDelete });
+    Child.belongsTo(Parent, { foreignKey, onDelete });
+  };
+
+  link(User, Booking, 'userId', false, 'RESTRICT');
+  link(Room, Booking, 'roomId', false, 'RESTRICT');
+  link(Room, Measurement, 'roomId', false, 'CASCADE');
+  link(Booking, Measurement, 'bookingId', true, 'SET NULL');
+  link(Room, DailyAggregate, 'roomId', false, 'CASCADE');
+  link(Room, LimitViolation, 'roomId', false, 'CASCADE');
+  link(Booking, LimitViolation, 'bookingId', true, 'SET NULL');
+  link(Booking, Inspection, 'bookingId', false, 'CASCADE');
+  link(User, ServiceRequest, 'userId', false, 'RESTRICT');
+  link(Room, ServiceRequest, 'roomId', false, 'RESTRICT');
+  link(User, ActionLog, 'userId', true, 'SET NULL');
+
+  return {
+    User, Room, Booking, Measurement, DailyAggregate,
+    LimitViolation, Inspection, ServiceRequest, ActionLog,
+  };
+}
+
+module.exports = { initModels };
+ДОДАТОК Б
+Універсальні CRUD-маршрути
+
+Файл src/crud.js
+'use strict';
+
+const { Router } = require('express');
+const { Op } = require('sequelize');
+const { HttpError, asyncHandler } = require('./middleware/errors');
+const { pick, parsePaging } = require('./utils');
+
+const ALL_OPERATIONS = ['list', 'get', 'create', 'update', 'remove'];
+
+// Будує стандартний CRUD-роутер для моделі.
+// Особливості кожної сутності задаються через параметри (поля, guards, prepare тощо).
+function buildCrud(options) {
+  const {
+    Model,
+    entity,
+    log,
+    createFields = [],
+    updateFields = [],
+    filterFields = [],
+    booleanFilters = [],
+    extraWhere = () => ({}),
+    scope = async () => ({}),
+    prepare = async (req, data) => data,
+    serialize = (req, item) => item,
+    guards = {},
+    lock = null,
+    only = ALL_OPERATIONS,
+  } = options;
+
+  const router = Router();
+
+  const guardsFor = (operation) => guards[operation] || [];
+  const runExclusively = (task) => (lock ? lock.run(task) : task());
+
+  // Шукає запис за id з урахуванням доступу користувача (scope)
+  const findOr404 = async (req) => {
+    const where = { id: req.params.id, ...(await scope(req)) };
+    const item = await Model.findOne({ where });
+    if (!item) {
+      throw new HttpError(404, `${entity} not found`);
+    }
+    return item;
+  };
+
+  // Будує умови пошуку зі звичайних і булевих query-параметрів
+  const buildFilters = (query) => {
+    const where = {};
+
+    for (const field of filterFields) {
+      const value = query[field];
+      if (value === undefined) {
+        continue;
+      }
+
+      if (typeof value !== 'string') {
+        throw new HttpError(400, `Query parameter "${field}" must be a single value`);
+      }
+      where[field] = value;
+    }
+
+    for (const field of booleanFilters) {
+      const value = query[field];
+      if (value === undefined) {
+        continue;
+      }
+
+      if (value !== 'true' && value !== 'false') {
+        throw new HttpError(400, `Query parameter "${field}" must be "true" or "false"`);
+      }
+      where[field] = value === 'true';
+    }
+
+    return where;
+  };
+
+  if (only.includes('list')) {
+    router.get('/', ...guardsFor('list'), asyncHandler(async (req, res) => {
+      // Умови поєднуються через AND, щоб обмеження доступу (scope)
+      // не затирало фільтр за тим самим полем (наприклад, bookingId)
+      const where = {
+        [Op.and]: [buildFilters(req.query), extraWhere(req), await scope(req)],
+      };
+
+      const { limit, offset } = parsePaging(req.query);
+      const { rows, count } = await Model.findAndCountAll({
+        where,
+        limit,
+        offset,
+        order: [['id', 'ASC']],
+      });
+
+      res.json({
+        total: count,
+        limit,
+        offset,
+        items: rows.map((item) => serialize(req, item)),
+      });
+    }));
+  }
+
+  if (only.includes('get')) {
+    router.get('/:id', ...guardsFor('get'), asyncHandler(async (req, res) => {
+      const item = await findOr404(req);
+      res.json(serialize(req, item));
+    }));
+  }
+
+  if (only.includes('create')) {
+    router.post('/', ...guardsFor('create'), asyncHandler(async (req, res) => {
+      const item = await runExclusively(async () => {
+        const data = await prepare(req, pick(req.body, createFields), null);
+        const created = await Model.create(data);
+        return created.reload();
+      });
+
+      await log(req, 'create', entity, item.id);
+      res.status(201).json(serialize(req, item));
+    }));
+  }
+
+  if (only.includes('update')) {
+    router.put('/:id', ...guardsFor('update'), asyncHandler(async (req, res) => {
+      const item = await runExclusively(async () => {
+        const found = await findOr404(req);
+        const data = await prepare(req, pick(req.body, updateFields), found);
+        await found.update(data);
+        return found;
+      });
+
+      await log(req, 'update', entity, item.id);
+      res.json(serialize(req, item));
+    }));
+  }
+
+  if (only.includes('remove')) {
+    router.delete('/:id', ...guardsFor('remove'), asyncHandler(async (req, res) => {
+      const item = await findOr404(req);
+      await item.destroy();
+
+      await log(req, 'delete', entity, item.id);
+      res.status(204).end();
+    }));
+  }
+
+  return router;
+}
+
+module.exports = { buildCrud };
+
+Файл src/utils.js
+'use strict';
+
+const { HttpError } = require('./middleware/errors');
+
+const DEFAULT_TIME_ZONE = 'Europe/Kyiv';
+
+// ---------- Перевірка вхідних значень ----------
+
+function parseDate(value, name) {
+  const date = value instanceof Date ? value : new Date(value);
+  const isMissing = value === undefined || value === null;
+
+  if (isMissing || Number.isNaN(date.getTime())) {
+    throw new HttpError(400, `Field "${name}" must be a valid date-time`);
+  }
+  return date;
+}
+
+function requireNumber(value, name) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    throw new HttpError(400, `Field "${name}" must be a number`);
+  }
+  return value;
+}
+
+// Приймає ціле число або рядок із цілим числом (наприклад, "5")
+function requireInteger(value, name) {
+  const isIntegerString = typeof value === 'string' && /^-?\d+$/.test(value.trim());
+  const number = isIntegerString ? Number(value) : value;
+
+  if (typeof number !== 'number' || !Number.isInteger(number)) {
+    throw new HttpError(400, `Field "${name}" must be an integer`);
+  }
+  return number;
+}
+
+// Перевіряє дату у форматі YYYY-MM-DD (разом із існуванням такої дати в календарі)
+function requireDateOnly(value, name) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof value === 'string' ? value : '');
+
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+
+    const date = new Date(Date.UTC(year, month - 1, day));
+    const isRealDate = date.getUTCFullYear() === year
+      && date.getUTCMonth() === month - 1
+      && date.getUTCDate() === day;
+
+    if (isRealDate) {
+      return value;
+    }
+  }
+
+  throw new HttpError(400, `Field "${name}" must be a valid date in format YYYY-MM-DD`);
+}
+
+// Залишає в об'єкті лише дозволені поля
+function pick(body, fields) {
+  const result = {};
+  for (const field of fields) {
+    if (body && body[field] !== undefined) {
+      result[field] = body[field];
+    }
+  }
+  return result;
+}
+
+// Читає параметри пагінації limit та offset із query-рядка
+function parsePaging(query, { defaultLimit = 50, maxLimit = 200 } = {}) {
+  const readInteger = (raw, name, min, fallback) => {
+    if (raw === undefined) {
+      return fallback;
+    }
+
+    const isValid = typeof raw === 'string' && /^\d+$/.test(raw) && Number(raw) >= min;
+    if (!isValid) {
+      throw new HttpError(400, `Query parameter "${name}" must be an integer >= ${min}`);
+    }
+    return Number(raw);
+  };
+
+  const limit = Math.min(readInteger(query.limit, 'limit', 1, defaultLimit), maxLimit);
+  const offset = readInteger(query.offset, 'offset', 0, 0);
+  return { limit, offset };
+}
+
+// ---------- Робота з часовими поясами ----------
+
+// Різниця (у мс) між місцевим часом у поясі timeZone та UTC у момент utcMs
+function tzOffsetMs(timeZone, utcMs) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(utcMs));
+
+  const values = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      values[part.type] = Number(part.value);
+    }
+  }
+
+  const localAsUtc = Date.UTC(
+    values.year, values.month - 1, values.day,
+    values.hour, values.minute, values.second,
+  );
+  return localAsUtc - Math.floor(utcMs / 1000) * 1000;
+}
+
+// Переводить північ за місцевим часом у момент UTC.
+// Зсув рахуємо двічі, щоб правильно обробити перехід на літній/зимовий час.
+function zonedMidnightToUtc(year, month, day, timeZone) {
+  const guess = Date.UTC(year, month - 1, day);
+  const firstTry = guess - tzOffsetMs(timeZone, guess);
+  return new Date(guess - tzOffsetMs(timeZone, firstTry));
+}
+
+// Межі доби [from, to) для дати YYYY-MM-DD у заданому часовому поясі
+function dayRange(dateStr, timeZone = DEFAULT_TIME_ZONE) {
+  requireDateOnly(dateStr, 'date');
+
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
+
+  return {
+    from: zonedMidnightToUtc(year, month, day, timeZone),
+    to: zonedMidnightToUtc(
+      nextDay.getUTCFullYear(), nextDay.getUTCMonth() + 1, nextDay.getUTCDate(), timeZone,
+    ),
+  };
+}
+
+// ---------- Черга виконання ----------
+
+// Мьютекс: завдання виконуються строго по черзі.
+// Потрібен, щоб два однакові бронювання не пройшли перевірку одночасно.
+class Mutex {
+  constructor() {
+    this.tail = Promise.resolve();
+  }
+
+  run(task) {
+    const result = this.tail.then(() => task());
+    // Помилка одного завдання не повинна зупиняти чергу
+    this.tail = result.catch(() => {});
+    return result;
+  }
+}
+
+module.exports = {
+  DEFAULT_TIME_ZONE,
+  parseDate,
+  requireNumber,
+  requireInteger,
+  requireDateOnly,
+  pick,
+  parsePaging,
+  dayRange,
+  Mutex,
+};
+
+
+
+ДОДАТОК В
+Взаємодія з клієнтами: маршрути бронювань і вимірювань
+
+Файл src/routes/bookings.js
+'use strict';
+
+const { Op } = require('sequelize');
+const { buildCrud } = require('../crud');
+const { HttpError } = require('../middleware/errors');
+const { parseDate, requireInteger, Mutex } = require('../utils');
+
+const MS_IN_HOUR = 3600 * 1000;
+
+module.exports = ({ models, config, auth, log }) => {
+  const { Booking } = models;
+
+  // Мьютекс не дає двом запитам одночасно забронювати одну кімнату
+  const lock = new Mutex();
+
+  // Перевіряє час бронювання та відсутність перетину з іншими бронюваннями
+  const checkTimesAndOverlap = async (roomId, start, end, status, selfId) => {
+    if (end <= start) {
+      throw new HttpError(400, 'endTime must be later than startTime');
+    }
+    if (end - start > config.maxBookingHours * MS_IN_HOUR) {
+      throw new HttpError(400, `Booking duration must not exceed ${config.maxBookingHours} hours`);
+    }
+
+    // Скасовані та завершені бронювання кімнату не займають
+    if (status === 'cancelled' || status === 'completed') {
+      return;
+    }
+
+    const where = {
+      roomId,
+      status: { [Op.in]: ['created', 'active'] },
+      startTime: { [Op.lt]: end },
+      endTime: { [Op.gt]: start },
+    };
+    if (selfId) {
+      where.id = { [Op.ne]: selfId };
+    }
+
+    const overlapping = await Booking.findOne({ where });
+    if (overlapping) {
+      throw new HttpError(409, 'The room is already booked for this time');
+    }
+  };
+
+  // Обмеження для звичайного мешканця при зміні свого бронювання
+  const checkResidentCanChange = (item, data) => {
+    if (item.status !== 'created') {
+      throw new HttpError(409, 'Only bookings with status "created" can be changed');
+    }
+
+    const triesToChangeRoom = data.roomId !== undefined;
+    const triesToSetOtherStatus = data.status && data.status !== 'cancelled';
+    if (triesToChangeRoom || triesToSetOtherStatus) {
+      throw new HttpError(403, 'Forbidden');
+    }
+
+    if (data.status === 'cancelled' && item.startTime <= new Date()) {
+      throw new HttpError(409, 'A booking can be cancelled only before it starts');
+    }
+  };
+
+  const prepare = async (req, data, item) => {
+    const isAdmin = req.user.role === 'admin';
+
+    if (item && !isAdmin) {
+      checkResidentCanChange(item, data);
+    }
+
+    if (!item) {
+      // Адміністратор може створити бронювання від імені іншого користувача
+      const forOtherUser = isAdmin && req.body.userId !== undefined;
+      data.userId = forOtherUser ? requireInteger(req.body.userId, 'userId') : req.user.id;
+      data.status = 'created';
+    }
+
+    // Значення, яких немає в запиті, беремо зі збереженого бронювання
+    const roomId = requireInteger(
+      data.roomId !== undefined ? data.roomId : (item && item.roomId),
+      'roomId',
+    );
+    const start = parseDate(
+      data.startTime !== undefined ? data.startTime : (item && item.startTime),
+      'startTime',
+    );
+    const end = parseDate(
+      data.endTime !== undefined ? data.endTime : (item && item.endTime),
+      'endTime',
+    );
+    const status = data.status || (item && item.status);
+
+    await checkTimesAndOverlap(roomId, start, end, status, item && item.id);
+
+    // Записуємо вже перевірені та приведені значення
+    if (data.roomId !== undefined) {
+      data.roomId = roomId;
+    }
+    if (data.startTime !== undefined) {
+      data.startTime = start;
+    }
+    if (data.endTime !== undefined) {
+      data.endTime = end;
+    }
+    return data;
+  };
+
+  // Дозволяє фільтрувати бронювання, що перетинаються з проміжком from..to
+  const extraWhere = (req) => {
+    const where = {};
+    if (req.query.from) {
+      where.endTime = { [Op.gt]: parseDate(req.query.from, 'from') };
+    }
+    if (req.query.to) {
+      where.startTime = { [Op.lt]: parseDate(req.query.to, 'to') };
+    }
+    return where;
+  };
+
+  return buildCrud({
+    Model: Booking,
+    entity: 'Booking',
+    log,
+    lock,
+    createFields: ['roomId', 'startTime', 'endTime'],
+    updateFields: ['roomId', 'startTime', 'endTime', 'status', 'cancelReason'],
+    filterFields: ['roomId', 'userId', 'status'],
+    guards: {
+      list: [auth.authenticate],
+      get: [auth.authenticate],
+      create: [auth.authenticate],
+      update: [auth.authenticate],
+      remove: auth.adminOnly,
+    },
+    extraWhere,
+    // Мешканець бачить лише власні бронювання
+    scope: async (req) => (req.user.role === 'admin' ? {} : { userId: req.user.id }),
+    prepare,
+  });
+};
+
+
+
+Файл src/routes/rooms.js
+'use strict';
+
+const { Op } = require('sequelize');
+const { buildCrud } = require('../crud');
+const { HttpError, asyncHandler } = require('../middleware/errors');
+const { dayRange, DEFAULT_TIME_ZONE } = require('../utils');
+
+const ROOM_FIELDS = ['name', 'description', 'waterLimit', 'lightLimit', 'tempMin', 'tempMax'];
+
+module.exports = ({ models, config, auth, log }) => {
+  const router = buildCrud({
+    Model: models.Room,
+    entity: 'Room',
+    log,
+    createFields: ROOM_FIELDS,
+    updateFields: ROOM_FIELDS,
+    guards: {
+      list: [auth.authenticate],
+      get: [auth.authenticate],
+      create: auth.adminOnly,
+      update: auth.adminOnly,
+      remove: auth.adminOnly,
+    },
+    // Мешканці не бачать службових ключів кімнати
+    serialize: (req, room) => {
+      const data = room.toJSON();
+      if (req.user.role !== 'admin') {
+        delete data.deviceKey;
+        delete data.qrToken;
+      }
+      return data;
+    },
+  });
+
+  // Розклад бронювань кімнати за один день
+  router.get('/:id/bookings', auth.authenticate, asyncHandler(async (req, res) => {
+    const room = await models.Room.findByPk(req.params.id);
+    if (!room) {
+      throw new HttpError(404, 'Room not found');
+    }
+
+    const timeZone = config.timeZone || DEFAULT_TIME_ZONE;
+    const { from, to } = dayRange(req.query.date, timeZone);
+
+    // Беремо бронювання, які перетинаються з обраною добою
+    const bookings = await models.Booking.findAll({
+      where: {
+        roomId: room.id,
+        status: { [Op.in]: ['created', 'active', 'completed'] },
+        startTime: { [Op.lt]: to },
+        endTime: { [Op.gt]: from },
+      },
+      order: [['startTime', 'ASC']],
+    });
+
+    // Власника бронювання бачить лише адміністратор
+    const isAdmin = req.user.role === 'admin';
+    const items = bookings.map((booking) => ({
+      id: booking.id,
+      startTime: booking.startTime,
+      endTime: booking.endTime,
+      status: booking.status,
+      ...(isAdmin ? { userId: booking.userId } : {}),
+    }));
+
+    res.json({
+      roomId: room.id,
+      date: req.query.date,
+      timeZone,
+      from,
+      to,
+      items,
+    });
+  }));
+
+  return router;
+};
+
+
+
+Файл src/routes/measurements.js
+'use strict';
+
+const { Op } = require('sequelize');
+const { buildCrud } = require('../crud');
+const { HttpError, asyncHandler } = require('../middleware/errors');
+const { parseDate, requireNumber } = require('../utils');
+
+module.exports = ({ models, auth, log }) => {
+  const { Room, Booking, Measurement } = models;
+
+  // Читання і видалення - стандартний CRUD, створення зроблено окремо нижче
+  const router = buildCrud({
+    Model: Measurement,
+    entity: 'Measurement',
+    log,
+    filterFields: ['roomId', 'bookingId'],
+    only: ['list', 'get', 'remove'],
+    guards: {
+      list: [auth.authenticate],
+      get: [auth.authenticate],
+      remove: auth.adminOnly,
+    },
+    extraWhere: (req) => {
+      const range = {};
+      if (req.query.from) {
+        range[Op.gte] = parseDate(req.query.from, 'from');
+      }
+      if (req.query.to) {
+        range[Op.lte] = parseDate(req.query.to, 'to');
+      }
+
+      const hasRange = Reflect.ownKeys(range).length > 0;
+      return hasRange ? { measuredAt: range } : {};
+    },
+  });
+
+  // Пристрій (ESP32) надсилає вимірювання, автентифікація - за ключем пристрою
+  router.post('/', asyncHandler(async (req, res) => {
+    const deviceKey = req.get('X-Device-Key');
+    const room = deviceKey ? await Room.findOne({ where: { deviceKey } }) : null;
+    if (!room) {
+      throw new HttpError(401, 'Invalid or missing device key');
+    }
+
+    const body = req.body || {};
+    const measuredAt = body.measuredAt ? parseDate(body.measuredAt, 'measuredAt') : new Date();
+
+    // Прив'язуємо вимірювання до активного бронювання кімнати (якщо воно є)
+    const booking = await Booking.findOne({
+      where: {
+        roomId: room.id,
+        status: 'active',
+        startTime: { [Op.lte]: measuredAt },
+        endTime: { [Op.gte]: measuredAt },
+      },
+    });
+
+    const measurement = await Measurement.create({
+      roomId: room.id,
+      bookingId: booking ? booking.id : null,
+      measuredAt,
+      waterLevel: requireNumber(body.waterLevel, 'waterLevel'),
+      illuminance: requireNumber(body.illuminance, 'illuminance'),
+      temperature: requireNumber(body.temperature, 'temperature'),
+    });
+
+    res.status(201).json(measurement);
+  }));
+
+  return router;
+};
+
+
+
+
+ДОДАТОК Г
+Автентифікація, права доступу та обробка помилок
+
+Файл src/routes/auth.js
+'use strict';
+
+const { Router } = require('express');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { HttpError, asyncHandler } = require('../middleware/errors');
+
+const MIN_PASSWORD_LENGTH = 6;
+
+module.exports = ({ models, config, auth, log }) => {
+  const router = Router();
+  const { User } = models;
+
+  // Реєстрація: новий користувач завжди отримує роль "resident"
+  router.post('/register', asyncHandler(async (req, res) => {
+    const { email, password, displayName } = req.body || {};
+
+    if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+      throw new HttpError(400, 'Password must be at least 6 characters long');
+    }
+
+    const user = await User.create({
+      email,
+      displayName,
+      role: 'resident',
+      passwordHash: bcrypt.hashSync(password, 10),
+    });
+
+    await log({ user }, 'register', 'User', user.id);
+    res.status(201).json(user);
+  }));
+
+  // Вхід: перевіряємо пароль і повертаємо JWT-токен
+  router.post('/login', asyncHandler(async (req, res) => {
+    const { email, password } = req.body || {};
+
+    const user = await User.findOne({ where: { email: String(email || '') } });
+    const isPasswordValid = user && bcrypt.compareSync(String(password || ''), user.passwordHash);
+
+    if (!isPasswordValid) {
+      throw new HttpError(401, 'Invalid email or password');
+    }
+    if (user.isBlocked) {
+      throw new HttpError(403, 'Account is blocked');
+    }
+
+    const token = jwt.sign({ sub: user.id, role: user.role }, config.jwtSecret, {
+      expiresIn: config.jwtExpiresIn,
+    });
+
+    await log({ user }, 'login', 'User', user.id);
+    res.json({ token, user });
+  }));
+
+  router.get('/me', auth.authenticate, (req, res) => res.json(req.user));
+
+  return router;
+};
+
+
+Файл src/middleware/auth.js
+'use strict';
+
+const jwt = require('jsonwebtoken');
+const { HttpError, asyncHandler } = require('./errors');
+
+// Створює middleware для автентифікації (JWT) та перевірки ролей.
+function createAuth(models, config) {
+  const authenticate = asyncHandler(async (req, res, next) => {
+    // Очікуваний заголовок: "Authorization: Bearer <token>"
+    const header = req.headers.authorization || '';
+    const [scheme, token] = header.split(' ');
+    if (scheme !== 'Bearer' || !token) {
+      throw new HttpError(401, 'Authentication required');
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, config.jwtSecret);
+    } catch (e) {
+      throw new HttpError(401, 'Invalid or expired token');
+    }
+
+    const user = await models.User.findByPk(payload.sub);
+    if (!user) {
+      throw new HttpError(401, 'User no longer exists');
+    }
+    if (user.isBlocked) {
+      throw new HttpError(403, 'Account is blocked');
+    }
+
+    req.user = user;
+    next();
+  });
+
+  const requireRole = (...roles) => (req, res, next) => {
+    if (roles.includes(req.user.role)) {
+      return next();
+    }
+    return next(new HttpError(403, 'Forbidden'));
+  };
+
+  const adminOnly = [authenticate, requireRole('admin')];
+
+  return { authenticate, requireRole, adminOnly };
+}
+
+module.exports = { createAuth };
+
+
+Файл src/middleware/errors.js
+'use strict';
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// Обгортка для async-обробників: будь-яка помилка передається в next(),
+// тому її обробить errorHandler.
+const asyncHandler = (handler) => (req, res, next) =>
+  new Promise((resolve) => resolve(handler(req, res, next))).catch(next);
+
+function isClientErrorStatus(status) {
+  return Number.isInteger(status) && status >= 400 && status < 500;
+}
+
+// Єдине місце, де помилки перетворюються на HTTP-відповіді.
+function errorHandler(err, req, res, next) {
+  if (err instanceof HttpError) {
+    return res.status(err.status).json({ error: err.message });
+  }
+
+  // Некоректний JSON у тілі запиту
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Invalid JSON body' });
+  }
+
+  if (isClientErrorStatus(err.status)) {
+    return res.status(err.status).json({ error: err.message });
+  }
+
+  if (err.name === 'SequelizeUniqueConstraintError') {
+    return res.status(409).json({ error: 'Record with such unique value already exists' });
+  }
+
+  if (err.name === 'SequelizeValidationError') {
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: err.errors.map((e) => e.message),
+    });
+  }
+
+  if (err.name === 'SequelizeForeignKeyConstraintError') {
+    const isDelete = req.method === 'DELETE';
+    const status = isDelete ? 409 : 400;
+    const message = isDelete
+      ? 'Record is referenced by other records'
+      : 'Referenced record does not exist';
+    return res.status(status).json({ error: message });
+  }
+
+  console.error(err);
+  return res.status(500).json({ error: 'Internal server error' });
+}
+
+module.exports = { HttpError, asyncHandler, errorHandler };
+
+
+
+
+
+ДОДАТОК Д
+Автоматичні тести
+
+Файл testkit/harness.js
+'use strict';
+
+const bcrypt = require('bcryptjs');
+const { createSequelize } = require('../src/db');
+const { initModels } = require('../src/models');
+const { createApp } = require('../src/app');
+
+const TEST_CONFIG = {
+  jwtSecret: 'test-secret', jwtExpiresIn: '1h', maxBookingHours: 24, timeZone: 'Europe/Kyiv',
+};
+
+/** Час UTC у 2030 році у форматі ISO: T(місяць, день, година, хвилина). */
+const T = (month, day, hour = 0, minute = 0) => new Date(Date.UTC(2030, month - 1, day, hour, minute)).toISOString();
+
+/**
+ * Запускає застосунок із БД SQLite у пам'яті на вільному порту та повертає допоміжні засоби:
+ * api() — HTTP-запит, createUser/createRoom/createBooking — створення даних напряму через ORM.
+ */
+async function startTestApp(overrides = {}) {
+  const config = { ...TEST_CONFIG, ...overrides };
+  const sequelize = createSequelize(':memory:');
+  const models = initModels(sequelize);
+  await sequelize.sync();
+  const server = await new Promise((resolve) => {
+    const s = createApp(models, config).listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let counter = 0;
+  const unique = (prefix) => { counter += 1; return `${prefix}-${counter}`; };
+
+  async function api(method, path, { body, token, headers, rawBody } = {}) {
+    const res = await fetch(base + path, {
+      method,
+      headers: {
+        ...(body !== undefined || rawBody !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+      body: rawBody !== undefined ? rawBody : (body !== undefined ? JSON.stringify(body) : undefined),
+    });
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch (e) {
+      data = text;
+    }
+    return { status: res.status, data, headers: res.headers };
+  }
+
+  async function createUser({ role = 'resident', password = 'secret1', displayName = 'Test User', email, isBlocked = false } = {}) {
+    const user = await models.User.create({
+      email: email || `${unique('user')}@test.local`,
+      displayName, role, isBlocked, passwordHash: bcrypt.hashSync(password, 4),
+    });
+    let token = null;
+    if (!isBlocked) {
+      token = (await api('POST', '/api/auth/login', { body: { email: user.email, password } })).data.token;
+    }
+    return { user, password, token };
+  }
+
+  const createRoom = (fields = {}) => models.Room.create({ name: unique('Room'), ...fields });
+
+  const createBooking = ({ room, user, start, end, status = 'created' }) => models.Booking.create({
+    roomId: room.id, userId: (user.user || user).id, startTime: start, endTime: end, status,
+  });
+
+  async function close() {
+    if (server.closeAllConnections) {
+      server.closeAllConnections();
+    }
+    await new Promise((resolve) => server.close(resolve));
+    await sequelize.close();
+  }
+
+  return { config, sequelize, models, server, base, api, createUser, createRoom, createBooking, unique, close };
+}
+
+module.exports = { startTestApp, T, TEST_CONFIG };
+
+
+Файл test/bookings.api.test.js
+'use strict';
+
+const { describe, it, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { startTestApp, T } = require('../testkit/harness');
+
+describe('бронювання кімнат', () => {
+  let app; let admin; let resident; let other;
+  before(async () => {
+    app = await startTestApp();
+    admin = await app.createUser({ role: 'admin' });
+    resident = await app.createUser();
+    other = await app.createUser();
+  });
+  after(() => app.close());
+
+  const book = (room, start, end, token = resident.token, extra = {}) => app.api('POST', '/api/bookings', {
+    token, body: { roomId: room.id, startTime: start, endTime: end, ...extra },
+  });
+
+  describe('створення', () => {
+    it('створює бронювання зі статусом created (201)', async () => {
+      const room = await app.createRoom();
+      const r = await book(room, T(1, 10, 10), T(1, 10, 12));
+      assert.equal(r.status, 201);
+      assert.equal(r.data.status, 'created');
+      assert.equal(r.data.roomId, room.id);
+    });
+    it('відсутній roomId → 400, а не 500', async () => {
+      const r = await app.api('POST', '/api/bookings', { token: resident.token, body: { startTime: T(1, 10, 10), endTime: T(1, 10, 12) } });
+      assert.equal(r.status, 400);
+    });
+    it('тривалість рівно 24 години допустима', async () => {
+      const room = await app.createRoom();
+      assert.equal((await book(room, T(1, 10, 10), T(1, 11, 10))).status, 201);
+    });
+    it('тривалість 24 години і 1 хвилина → 400', async () => {
+      const room = await app.createRoom();
+      assert.equal((await book(room, T(1, 10, 10), T(1, 11, 10, 1))).status, 400);
+    });
+  });
+
+  describe('перевірка перетину бронювань', () => {
+    let room;
+    before(async () => {
+      room = await app.createRoom();
+      assert.equal((await book(room, T(2, 10, 10), T(2, 10, 12))).status, 201);
+    });
+    it('однаковий інтервал → 409', async () => assert.equal((await book(room, T(2, 10, 10), T(2, 10, 12), other.token)).status, 409));
+    it('скасоване бронювання звільняє слот', async () => {
+      const r2 = await app.createRoom();
+      const first = await book(r2, T(2, 12, 10), T(2, 12, 12));
+      await app.api('PUT', `/api/bookings/${first.data.id}`, { token: resident.token, body: { status: 'cancelled' } });
+      assert.equal((await book(r2, T(2, 12, 10), T(2, 12, 12), other.token)).status, 201);
+    });
+    it('20 паралельних запитів на той самий слот: успішний рівно один', async () => {
+      const r2 = await app.createRoom();
+      const results = await Promise.all(Array.from({ length: 20 }, () => book(r2, T(2, 15, 10), T(2, 15, 12))));
+      const codes = results.map((r) => r.status);
+      assert.equal(codes.filter((c) => c === 201).length, 1);
+      assert.equal(codes.filter((c) => c === 409).length, 19);
+      assert.equal(await app.models.Booking.count({ where: { roomId: r2.id } }), 1);
+    });
+  });
+
+  describe('перегляд і видимість', () => {
+    it('мешканець бачить лише власні бронювання', async () => {
+      const room = await app.createRoom();
+      await app.createBooking({ room, user: resident, start: T(3, 1, 10), end: T(3, 1, 11) });
+      await app.createBooking({ room, user: other, start: T(3, 1, 12), end: T(3, 1, 13) });
+      const r = await app.api('GET', `/api/bookings?roomId=${room.id}`, { token: resident.token });
+      assert.equal(r.data.total, 1);
+      assert.equal(r.data.items[0].userId, resident.user.id);
+    });
+    it('мешканець не бачить чуже бронювання за id (404)', async () => {
+      const room = await app.createRoom();
+      const b = await app.createBooking({ room, user: other, start: T(3, 4, 10), end: T(3, 4, 11) });
+      assert.equal((await app.api('GET', `/api/bookings/${b.id}`, { token: resident.token })).status, 404);
+    });
+  });
+
+  describe('зміна та скасування', () => {
+    const put = (id, body, token = resident.token) => app.api('PUT', `/api/bookings/${id}`, { token, body });
+
+    it('мешканець скасовує власне бронювання до початку', async () => {
+      const room = await app.createRoom();
+      const b = (await book(room, T(4, 1, 10), T(4, 1, 12))).data;
+      const r = await put(b.id, { status: 'cancelled', cancelReason: 'Змінились плани' });
+      assert.equal(r.status, 200);
+      assert.equal(r.data.status, 'cancelled');
+      assert.equal(r.data.cancelReason, 'Змінились плани');
+    });
+    it('після початку мешканець скасувати не може (409)', async () => {
+      const room = await app.createRoom();
+      const start = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+      const end = new Date(Date.now() - 3600 * 1000).toISOString();
+      const b = await app.createBooking({ room, user: resident, start, end });
+      assert.equal((await put(b.id, { status: 'cancelled' })).status, 409);
+    });
+  });
+
+  describe('видалення', () => {
+    it('видалення бронювання каскадно видаляє огляди', async () => {
+      const room = await app.createRoom();
+      const b = await app.createBooking({ room, user: resident, start: T(5, 3, 10), end: T(5, 3, 11) });
+      await app.models.Inspection.create({ bookingId: b.id, type: 'checkin', state: 'ok' });
+      await app.api('DELETE', `/api/bookings/${b.id}`, { token: admin.token });
+      assert.equal(await app.models.Inspection.count({ where: { bookingId: b.id } }), 0);
+    });
+  });
+});
+
+
+
+Файл test/measurements.api.test.js
+'use strict';
+
+const { describe, it, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { startTestApp, T } = require('../testkit/harness');
+
+describe('приймання та архів вимірювань', () => {
+  let app; let admin; let resident; let room;
+  before(async () => {
+    app = await startTestApp();
+    admin = await app.createUser({ role: 'admin' });
+    resident = await app.createUser();
+    room = await app.createRoom();
+  });
+  after(() => app.close());
+
+  const send = (body, key = room.deviceKey, r = room) => app.api('POST', '/api/measurements', {
+    headers: key ? { 'X-Device-Key': key } : {}, body,
+  });
+  const reading = (minute, extra = {}) => ({
+    measuredAt: T(8, 1, 10, minute), waterLevel: 70, illuminance: 300, temperature: 22, ...extra,
+  });
+  let seq = 0;
+  // унікальний час вимірювання: кожен виклик дає наступну секунду 2031 року
+  const nextTime = () => new Date(Date.UTC(2031, 0, 1, 0, 0, 0) + (seq += 1) * 1000).toISOString();
+
+  describe('автентифікація пристрою', () => {
+    it('без ключа → 401', async () => assert.equal((await send(reading(0), null)).status, 401));
+  });
+
+  describe('приймання вимірювання', () => {
+    it('приймає коректне вимірювання (201)', async () => {
+      const r = await send({ ...reading(0), measuredAt: nextTime() });
+      assert.equal(r.status, 201);
+      assert.equal(r.data.waterLevel, 70);
+      assert.equal(r.data.illuminance, 300);
+      assert.equal(r.data.temperature, 22);
+    });
+    it('відхиляє дублікат (кімната, час) → 409', async () => {
+      const t = nextTime();
+      assert.equal((await send({ ...reading(0), measuredAt: t })).status, 201);
+      assert.equal((await send({ ...reading(0), measuredAt: t })).status, 409);
+    });
+    it('рівень води більший за 100 → 400', async () => {
+      assert.equal((await send({ ...reading(0), measuredAt: nextTime(), waterLevel: 100.1 })).status, 400);
+    });
+  });
+
+  describe('прив’язка до активного бронювання', () => {
+    let r2; let booking;
+    before(async () => {
+      r2 = await app.createRoom();
+      booking = await app.createBooking({ room: r2, user: resident, start: T(10, 1, 10), end: T(10, 1, 12), status: 'active' });
+    });
+    const at = (t) => send({ measuredAt: t, waterLevel: 50, illuminance: 10, temperature: 20 }, r2.deviceKey);
+
+    it('вимірювання всередині інтервалу прив’язується', async () => assert.equal((await at(T(10, 1, 11))).data.bookingId, booking.id));
+    it('вимірювання після завершення не прив’язується', async () => assert.equal((await at(T(10, 1, 12, 1))).data.bookingId, null));
+  });
+
+  describe('перегляд архіву', () => {
+    let r2; let first; let second; let third;
+    before(async () => {
+      r2 = await app.createRoom();
+      const mk = (min) => send({ measuredAt: T(11, 1, 10, min), waterLevel: 10 + min, illuminance: 1, temperature: 20 }, r2.deviceKey);
+      first = (await mk(0)).data; second = (await mk(10)).data; third = (await mk(20)).data;
+    });
+    const list = (query, token = resident.token) => app.api('GET', `/api/measurements?roomId=${r2.id}${query}`, { token });
+
+    it('фільтр from включає межу', async () => {
+      const r = await list(`&from=${T(11, 1, 10, 10)}`);
+      assert.deepEqual(r.data.items.map((i) => i.id), [second.id, third.id]);
+    });
+  });
+
+  describe('видалення та недоступні операції', () => {
+    it('мешканець не може видалити вимірювання (403)', async () => {
+      const m = (await send({ ...reading(0), measuredAt: nextTime() })).data;
+      assert.equal((await app.api('DELETE', `/api/measurements/${m.id}`, { token: resident.token })).status, 403);
+    });
+  });
+});
+
+
+
+
+ДОДАТОК Е
+UML-діаграма прецедентів серверної частини
+
+
+Рисунок Е.1 - UML-діаграма прецедентів серверної частини (рисунок виконано самостійно)
+
+ДОДАТОК Ж
+Діаграми структури бази даних
+
+Рисунок Ж.1 - Діаграма структури БД, частина 1 (рисунок виконано самостійно)
+
+Рисунок Ж.2 - Діаграма структури БД, частина 2 (рисунок виконано самостійно)
