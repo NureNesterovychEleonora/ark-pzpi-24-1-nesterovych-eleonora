@@ -1,0 +1,28 @@
+{
+  "port": 3000,
+  "timeZone": "Europe/Kyiv",
+  "jwtExpiresIn": "8h",
+
+  "minBookingHours": 1,
+  "maxBookingHours": 24,
+  "maxActiveBookingsPerUser": 2,
+  "checkInBeforeMinutes": 30,
+  "checkInAfterMinutes": 60,
+
+  "defaultWaterLimit": 100,
+  "defaultLightLimit": 100,
+  "defaultTempMin": 18,
+  "defaultTempMax": 26,
+  "limitWarningRatio": 0.8,
+
+  "lightModePower": { "off": 0, "low": 1, "medium": 2, "high": 3 },
+  "maxMeasurementGapSeconds": 300,
+  "measurementRetentionDays": 14,
+
+  "llmModel": "gemini-3.5-flash-lite",
+  "llmTimeoutMs": 15000,
+  "llmDailyLimit": 50,
+
+  "nightlyJobTime": "00:05",
+  "uploadsDir": "./data/uploads"
+}

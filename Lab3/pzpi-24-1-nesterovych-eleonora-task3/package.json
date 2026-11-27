@@ -1,0 +1,27 @@
+{
+  "name": "habicore-server",
+  "version": "1.1.0",
+  "description": "HabiCore: серверна частина (Web API, БД, бізнес-логіка та адміністрування), лабораторна робота №3",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "seed": "node src/seed.js",
+    "demo-data": "node src/demo-data.js",
+    "db:reset": "node src/reset-db.js",
+    "test": "node --test",
+    "test:unit": "node --test test/utils.test.js test/errors.test.js test/openapi.test.js test/resources.test.js test/booking-rules.test.js test/request-rules.test.js test/explanations.test.js test/settings.test.js",
+    "test:coverage": "node --test --experimental-test-coverage"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "sequelize": "^6.37.3",
+    "sqlite3": "^5.1.7",
+    "swagger-ui-express": "^5.0.1"
+  }
+}
