@@ -1,1 +1,2433 @@
+МІНІСТЕРСТВО ОСВІТИ І НАУКИ УКРАЇНИ
+ХАРКІВСЬКИЙ НАЦІОНАЛЬНИЙ УНІВЕРСИТЕТ РАДІОЕЛЕКТРОНІКИ
+КАФЕДРА ПРОГРАМНОЇ ІНЖЕНЕРІЇ
 
+
+
+
+
+
+ЗВІТ З ЛАБОРАТОРНОЇ РОБОТИ №3
+Дисципліна: Аналіз та рефакторинг коду програмного забезпечення
+Тема: Розробка бізнес-логіки та функцій адміністрування серверної частини програмної системи
+
+
+
+
+
+Звіт склала:
+ст. гр. ПЗПІ-24-1
+Нестерович Елеонора Романівна	Перевірив:
+асистент кафедри ПІ, доктор філософії
+Дашенков Д. С.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Харків - 2026
+
+1. Мета роботи
+Ознайомитися з процесом розроблення бізнес-логіки та функцій адміністрування серверної частини програмної системи. Набути практичних навичок реалізації бізнес-логіки й функцій адміністрування, побудови UML-діаграм діяльності та взаємодії, а також перевірки (тестування) роботи серверної частини.
+
+2. Завдання
+Для програмної системи «Програмна система для керування ресурсами навчального житлового модуля» (HabiCore) виконати такі завдання:
+    • спроєктувати алгоритми бізнес-логіки, що забезпечують основні операції з даними, обробку запитів клієнтів і виконання специфічних правил роботи системи;
+    • розробити функції адміністрування: керування користувачами та ролями, налаштування системних параметрів, моніторинг активності та доступ до журналу дій;
+    • створити програмну реалізацію бізнес-логіки та функцій адміністрування серверної частини, включно з обробкою запитів до БД і взаємодією з клієнтами;
+    • створити UML-діаграму діяльності та UML-діаграми взаємодії;
+    • перевірити роботу розроблених функцій автоматизованими тестами та вручну;
+    • оформити звіт, завантажити його у форматі PDF на платформу dl.nure.ua, а текстову версію звіту та код - у репозиторій GitHub.
+
+3. Опис виконаної роботи
+Роботу виконано відповідно до документа Vision & Scope [1]. Репозиторій проєкту розміщено на платформі GitHub: https://github.com/NureNesterovychEleonora/arkpz-pzpi-24-1-nesterovych-eleonora
+
+3.1 Архітектура бізнес-логіки
+Серверну частину, розроблену в лабораторній роботі №2, розширено окремим шаром бізнес-логіки. Архітектура складається з таких шарів:
+    • шар маршрутизації HTTP (каталог src/routes): приймає запити, перевіряє автентифікацію та роль користувача, викликає сервіси й формує відповіді (додаток Г);
+    • шар бізнес-правил (src/services/booking-rules.js, resources.js, request-rules.js): чисті функції без звернень до БД, які отримують дані та поточний час як параметри (додаток А);
+    • шар сервісів (src/services/measurements.js, aggregates.js, booking-jobs.js, explanations.js, settings.js): алгоритми обробки даних, що працюють з БД через моделі ORM, і застосування системних параметрів (додатки Б, В і Г);
+    • шар доступу до даних: моделі ORM Sequelize над БД SQLite.
+
+Винесення правил у чисті функції дозволяє перевіряти їх модульними тестами без запуску сервера та БД. Сервіси створюються фабричними функціями, які отримують залежності (моделі, параметри, інші сервіси) як аргументи, тому, наприклад, звернення до зовнішньої мовної моделі в тестах замінюється тестовою функцією.
+Узгодженість даних забезпечують такі рішення: створення та зміна бронювань і обробка вимірювань виконуються послідовно через чергу Mutex, тому одночасні запити не створюють перетину бронювань і не втрачають накопичену витрату ресурсів; поселення та виселення змінюють статус бронювання й створюють запис огляду в одній транзакції SQL; подія перевищення зберігається одразу, а пояснення до неї формується у фоновому режимі, тому пристрій отримує відповідь без очікування зовнішнього сервісу.
+Фонові завдання виконує планувальник src/services/scheduler.js (додаток Б), який запускається разом із сервером: щохвилини оновлює статуси бронювань, а щоночі після 00:05 за київським часом розраховує добові агрегати за попередню добу, дораховує пропущені дати та видаляє застарілі сирі вимірювання. Системні параметри зберігаються у файлі settings.json, зміни якого застосовуються без перезапуску сервера, секретні значення (ключ підпису JWT, ключ API мовної моделі, дані першого адміністратора) - у змінних оточення або файлі .env.
+
+3.2 Вибір технологій
+Технології серверної частини збережено з попередньої роботи: Node.js, Express, ORM Sequelize і SQLite [1, 2, 3]. Транзакції Sequelize використано для атомарної зміни статусу бронювання разом із записом огляду [2]. Для приймання та видачі фотографій сервісних заявок застосовано вбудовані засоби Express (express.raw, express.static), а токен світлової сесії формується вбудованим модулем node:crypto (HMAC-SHA256) [8], тому додаткові бібліотеки не потрібні.
+Пояснення перевищень формує зовнішня мовна модель Google Gemini [4], до якої сервер звертається стандартною функцією fetch з обмеженням часу очікування. Межі доби й час нічного завдання обчислюються за київським часом засобами Intl.DateTimeFormat [5]. Тестування виконується вбудованим засобом Node.js node:test [6], статичний аналіз - засобом ESLint. UML-діаграми побудовано відповідно до специфікації UML 2.5 [7].
+
+3.3 Правила бронювання
+Під час створення та зміни бронювання сервер перевіряє такі правила (додаток А):
+    • час завершення пізніший за час початку;
+    • тривалість не менша за значення параметра minBookingHours (1 година) і не більша за значення параметра maxBookingHours (24 години);
+    • час початку нового бронювання не в минулому;
+    • мешканець має не більше maxActiveBookingsPerUser (2) поточних і майбутніх бронювань; обмеження не діє для адміністратора;
+    • бронювання не перетинається з іншими бронюваннями кімнати зі статусами created та active.
+Мешканець може змінювати лише власні бронювання зі статусом created і скасувати бронювання лише до його початку. Адміністратор може створювати бронювання від імені інших користувачів і змінювати будь-які бронювання. Порушення правила повертає код 400 (некоректні дані) або 409 (конфлікт).
+
+3.4 Поселення та виселення
+Поселення виконується запитом POST /api/bookings/{id}/check-in, який надсилає Android-застосунок після сканування QR-коду кімнати. Тіло запиту містить QR-токен кімнати та результат огляду (стан ok або issues і необов’язкову примітку). Сервер перевіряє, що бронювання належить користувачу й має статус created, QR-токен збігається з токеном заброньованої кімнати, поточний час входить у вікно поселення (від 30 хвилин до початку до 60 хвилин після початку, але не пізніше кінця бронювання) і в кімнаті немає іншого активного бронювання. Після цього в одній транзакції бронювання отримує статус active і створюється огляд типу checkin; якщо огляд некоректний, статус не змінюється (додаток Г).
+Під час поселення сервер також повертає токен світлової сесії lightToken. Токен обчислюється як перші 16 символів HMAC-SHA256 від ключа пристрою кімнати та номера бронювання. Android-застосунок передає його пристрою разом із BLE-командою світла, а пристрій, який знає власний ключ і номер активного бронювання з відповіді сервера, обчислює такий самий токен і приймає команду лише за збігу. Тому токен дійсний тільки протягом активного бронювання й перевіряється без звернення до сервера.
+Виселення виконується запитом POST /api/bookings/{id}/check-out з результатом огляду. Активне бронювання отримує статус completed, створюється огляд типу checkout, а витрата води та світла, накопичена в полях бронювання waterUsed і lightUsed, фіксується та записується в журнал дій.
+
+3.5 Потокова обробка вимірювань і контроль лімітів
+Пристрій кімнати надсилає вимірювання запитом POST /api/measurements із заголовком X-Device-Key. Кожне вимірювання містить рівень води, освітленість, температуру та поточний режим світла (off, low, medium, high). Алгоритм обробки (додатки А і Б, рисунок Е.1) такий:
+    • перевірка ключа пристрою та формату даних;
+    • пошук активного бронювання кімнати, у межі якого потрапляє час вимірювання, і попереднього вимірювання кімнати;
+    • збереження вимірювання в архів (повторне вимірювання з тим самим часом відхиляється з кодом 409);
+    • розрахунок витрати між попереднім і поточним вимірюванням того самого бронювання: витрата води дорівнює зменшенню рівня в ємності (поповнення не враховується), витрата світла - добутку потужності режиму світла попереднього вимірювання на тривалість проміжку; проміжок обмежується параметром maxMeasurementGapSeconds, щоб тривала відсутність зв’язку не спотворювала облік;
+    • додавання витрати до полів waterUsed і lightUsed бронювання;
+    • виявлення перевищень: подія для води або світла створюється один раз - у момент, коли накопичена витрата вперше перевищує ліміт бронювання; подія для температури створюється, коли значення виходить за допустимий діапазон кімнати;
+    • формування відповіді пристрою: поточні ліміти, використання лімітів, стан кімнати та перелік дозволених режимів світла.
+
+Стан кімнати та дозволені режими світла визначаються за правилами, наведеними в таблиці 1. Поріг попередження задає параметр limitWarningRatio (0,8). Ці дані пристрій використовує для світлодіодної індикації та локального контролю режимів світла.
+
+Таблиця 1 - Стан кімнати та дозволені режими світла
+Умова	Стан	Дозволені режими світла
+Немає активного бронювання, температура в діапазоні	normal	off
+Використано менше 80% лімітів	normal	off, low, medium, high
+Використано не менше 80% ліміту води або світла	warning	off, low (якщо поріг досягнуто для світла)
+Ліміт перевищено або температура поза діапазоном	violation	off (якщо вичерпано ліміт світла)
+
+Запит GET /api/rooms/{id}/resources повертає для ресурсної панелі та мобільного застосунку останнє вимірювання кімнати, використання лімітів активного бронювання (використано, ліміт, залишок, відсоток), стан і дозволені режими світла. Для графіка ресурсної панелі запит GET /api/rooms/{id}/history повертає вимірювання кімнати за останні 24 години (параметр hours), зведені в проміжки по 10 хвилин (параметр bucketMinutes): середні температура й освітленість, останні рівень води та режим світла в кожному проміжку (додатки А і Б).
+
+3.6 Пояснення перевищень
+Після збереження події перевищення сервіс пояснень (додаток В) формує технічний опис події: назва кімнати, ресурс, ліміт, фактичне значення, час, витрата бронювання, режим світла в момент виявлення (з вимірювання, що спричинило подію) та допустимий діапазон температури. Персональні дані користувача в опис не потрапляють, використовується лише ідентифікатор бронювання. Опис надсилається до Google Gemini API [4], відповідь приймається, якщо це непорожній текст довжиною до 600 символів.
+Якщо ключ API не задано, вичерпано денний ліміт звернень (параметр llmDailyLimit), сервіс не відповів протягом 15 секунд або відповідь не пройшла перевірку, використовується шаблонне пояснення. Текст зберігається разом з подією з позначкою джерела llm або template, тому вебклієнт може позначити пояснення, згенероване штучним інтелектом. Мовна модель лише пояснює подію й не змінює даних системи.
+
+3.7 Пакетна обробка та автоматичні статуси
+Нічне завдання розраховує для кожної кімнати добовий агрегат за попередню добу за київським часом: мінімальну, максимальну та середню температуру й освітленість, витрату води та світла (додаток Б). Межі доби обчислюються з урахуванням переходу на літній і зимовий час. Розрахунок ідемпотентний: повторний запуск оновлює наявний запис, а не створює новий. Якщо сервер був вимкнений, під час наступного запуску завдання дораховує агрегати за пропущені дати, сирі вимірювання яких ще зберігаються. Сирі вимірювання зберігаються протягом періоду, заданого параметром measurementRetentionDays (14 діб), після чого нічне завдання їх видаляє; агрегати зберігаються без обмеження строку. Адміністратор може повторити розрахунок за будь-яку дату в межах періоду зберігання запитом POST /api/daily-aggregates/calculate, а звіт агрегатів за обраний період повертає запит GET /api/daily-aggregates з параметрами from і to.
+Щохвилини планувальник виконує дві перевірки: бронювання зі статусом created, для якого минуло вікно поселення, скасовується з причиною no-show; бронювання зі статусом active, час якого завершився, отримує статус completed. Ці дії записуються в журнал без користувача (userId = null).
+
+3.8 Сервісні заявки
+Мешканець створює заявку з описом проблеми та додає фотографію запитом POST /api/service-requests/{id}/photo: зображення JPEG або PNG розміром до 5 МБ передається в тілі запиту, зберігається в каталозі data/uploads під випадковим ім’ям, а посилання на нього записується в поле photoUrl заявки. Адміністратор змінює статус заявки та додає коментар. Дозволено лише переходи new → in_progress → resolved і new → resolved; повернення до попереднього статусу відхиляється з кодом 409 (додаток А).
+
+3.9 Функції адміністрування
+Функції адміністрування доступні лише користувачам з роллю admin; перевірку виконує middleware авторизації, а заблокований користувач не може ні увійти, ні скористатися виданим раніше токеном. Реалізовано такі функції (додаток Г):
+    • керування користувачами та ролями (/api/users): перегляд списку з фільтрами за роллю і блокуванням, створення, зміна імені, ролі й пароля, блокування та розблокування, видалення облікового запису; адміністратор не може заблокувати себе, зняти з себе роль адміністратора або видалити власний обліковий запис, тому система не залишиться без адміністратора;
+    • редагування ресурсних лімітів кімнати (PUT /api/rooms/{id}): ліміти води та світла на бронювання і допустимий діапазон температури; нова кімната без явних лімітів отримує значення за замовчуванням із системних параметрів, а змінені ліміти одразу застосовуються під час обробки вимірювань;
+    • журнал дій (GET /api/action-logs): фіксує вхід і реєстрацію, створення, зміну та видалення записів, поселення й виселення, автоматичні зміни статусів, розрахунок агрегатів, видалення застарілих вимірювань, зміну системних параметрів і завантаження фото; підтримує фільтри за користувачем, типом дії, сутністю й періодом, нові записи показуються першими;
+    • моніторинг активності (GET /api/admin/stats): кількість користувачів за ролями та заблокованих, кількість кімнат, бронювань за статусами і сервісних заявок за статусами, п’ять останніх перевищень лімітів, а також кількість перевищень, вимірювань і записів журналу за останню добу;
+    • системні параметри: тривалість і кількість бронювань, вікно поселення, ліміти за замовчуванням, поріг попередження, потужність режимів світла, період зберігання вимірювань, параметри мовної моделі та час нічного завдання задаються у файлі settings.json; поточні значення без секретів повертає запит GET /api/admin/settings. Змінений файл застосовується без перезапуску сервера: сервер відстежує зміну файлу, а адміністратор може застосувати його запитом POST /api/admin/settings/reload. Нові значення перевіряються (тип, допустимий діапазон, узгодженість мінімальної й максимальної тривалості та меж температури), некоректний файл відхиляється з кодом 400 і поточні значення залишаються без змін; перелік змінених параметрів записується в журнал дій (додаток Г).
+
+Під час зміни запису універсальний CRUD-генератор порівнює значення полів до і після зміни та записує в поле details журналу перелік змін, наприклад «role: resident -> admin» або «waterLimit: 100 -> 20»; значення пароля в журнал не потрапляє. Взаємодію компонентів під час зміни ролі показано на рисунку Ж.2 (додаток Ж).
+
+3.10 Ендпоінти бізнес-логіки та адміністрування
+Нові та змінені ендпоінти API наведено в таблиці 2. Формат помилок і коди відповідей збережено з попередньої роботи; специфікацію OpenAPI доповнено новими ендпоінтами та прикладами запитів.
+
+Таблиця 2 - Ендпоінти бізнес-логіки та адміністрування
+Метод і шлях	Доступ	Опис
+POST /api/bookings/{id}/check-in	власник, адміністратор	Поселення: {qrToken, state, note}; created → active, огляд checkin; у відповіді токен світлової сесії lightToken
+POST /api/bookings/{id}/check-out	власник, адміністратор	Виселення: {state, note}; active → completed, огляд checkout
+POST /api/measurements	пристрій (X-Device-Key)	Вимірювання з полем lightMode; відповідь містить limits, usage, state, allowedLightModes, violations
+GET /api/rooms/{id}/resources	автентифіковані	Ресурсна панель: останнє вимірювання, використання лімітів, стан
+GET /api/rooms/{id}/history	автентифіковані	Графік ресурсної панелі: вимірювання за hours годин (за замовчуванням 24), зведені по bucketMinutes хвилин (за замовчуванням 10)
+GET /api/daily-aggregates	автентифіковані	Добові агрегати; фільтри roomId, date і період from, to
+POST /api/daily-aggregates/calculate	адміністратор	Розрахунок агрегатів за дату в межах періоду зберігання вимірювань: {date}
+POST /api/service-requests/{id}/photo	автор, адміністратор	Фото заявки (image/jpeg, image/png до 5 МБ)
+PUT /api/service-requests/{id}	адміністратор	Зміна статусу з перевіркою допустимих переходів
+PUT /api/users/{id}	адміністратор	Роль, блокування, пароль; захист від самоблокування
+PUT /api/rooms/{id}	адміністратор	Ресурсні ліміти кімнати
+GET /api/action-logs	адміністратор	Журнал дій; фільтри userId, action, entity, from, to
+GET /api/admin/settings	адміністратор	Системні параметри без секретів
+POST /api/admin/settings/reload	адміністратор	Застосування зміненого settings.json без перезапуску; перевірка значень, запис змін у журнал
+GET /api/admin/stats	адміністратор	Моніторинг активності: лічильники користувачів, бронювань, заявок, останні перевищення лімітів і події за добу
+
+Моделі Booking і Measurement доповнено полями waterUsed, lightUsed (накопичена витрата бронювання) і lightMode (режим світла в момент вимірювання).
+
+3.11 UML-діаграми діяльності та взаємодії
+Послідовність дій основного бізнес-процесу - бронювання, поселення, використання кімнати з контролем лімітів, виселення та автоматичне скасування - показано на UML-діаграмі діяльності (рисунок Е.1, додаток Е). Діаграма містить вузли розгалуження за умовами виконання правил бронювання, вікна поселення та перевищення лімітів, а також цикл надсилання вимірювань протягом бронювання.
+Обмін повідомленнями між пристроєм, Web API, сервісом обробки вимірювань, БД, сервісом пояснень і зовнішньою мовною моделлю під час обробки вимірювання з перевищенням ліміту показано на UML-діаграмі послідовності (рисунок Ж.1, додаток Ж): спочатку розраховується витрата між вимірюваннями (usageBetween), потім оновлюється накопичена витрата бронювання, після чого виявляються перевищення (detectViolations); фрагмент opt описує збереження події, а фрагмент alt - звернення до мовної моделі або резервне шаблонне пояснення. Взаємодію адміністратора з Web API, middleware автентифікації, CRUD-генератором і БД під час зміни ролі користувача та перегляду журналу дій показано на рисунку Ж.2.
+
+3.12 Тестування
+Бізнес-логіку та функції адміністрування перевірено автоматичними тестами (додаток Д), які запускаються командою npm test. Модульні тести перевіряють чисті функції бізнес-правил без БД; інтеграційні тести запускають застосунок із порожньою БД SQLite у пам’яті й надсилають реальні HTTP-запити. Набір складається з 214 тестів: усі 83 тести попередньої роботи збережено й адаптовано до нових правил, файл utils.test.js доповнено сімома тестами, а 124 тести додано для бізнес-логіки та адміністрування. Склад набору тестів наведено в таблиці 3.
+
+Таблиця 3 - Склад набору автоматичних тестів
+Файл тестів	Що перевіряється	Тестів
+booking-rules.test.js	правила бронювання: час, мінімальна й максимальна тривалість, кількість бронювань, вікно поселення, QR-код, no-show, автоматичне завершення, токен світлової сесії	19
+resources.test.js	витрата води та світла, обмеження проміжку, виявлення перевищень, стан кімнати, дозволені режими світла, добовий агрегат, точки графіка за 24 години	26
+request-rules.test.js	допустимі переходи статусів сервісних заявок	4
+explanations.test.js	опис події без персональних даних і з режимом світла, шаблонні пояснення, відповідь LLM, помилка і тайм-аут, денний ліміт звернень	11
+utils.test.js	допоміжні функції, київський час, попередня дата та зсув дати, опис змін для журналу	17
+errors.test.js, openapi.test.js	обробка помилок, специфікація OpenAPI	9
+settings.test.js	перевірка системних параметрів, опис змін, перечитування settings.json	6
+checkin-checkout.api.test.js	поселення і виселення, транзакція, токен світлової сесії, мінімальна тривалість, обмеження кількості бронювань, автоматичні статуси	16
+measurements-processing.api.test.js	потокова обробка: облік витрати, стани, події перевищення, пояснення у фоні, ресурсна панель	9
+aggregates-calculation.api.test.js, aggregates-retention.api.test.js	розрахунок і перерахунок добових агрегатів, права доступу, дорахунок пропущених дат, період зберігання вимірювань, звіт за період	9
+admin.api.test.js	ролі, блокування, захист власного облікового запису, ліміти, журнал, системні параметри, моніторинг активності й останні перевищення, фото та статуси заявок	18
+settings-reload.api.test.js	застосування системних параметрів без перезапуску, відхилення некоректного файлу, права доступу	3
+room-history.api.test.js	графік ресурсної панелі: період, крок, некоректні параметри	3
+інші тести API та моделей з ЛР2 (models, auth, users, rooms, bookings, measurements, aggregates-violations, inspections-requests, logs-integrity)	автентифікація, користувачі, кімнати, бронювання, вимірювання, огляди, заявки, журнал, моделі	64
+Разом		214
+
+Тести охоплюють основні й граничні випадки: бронювання, коротше за 1 годину; поселення з чужим QR-кодом, поза вікном поселення та за наявності іншого активного бронювання; відкат транзакції за некоректного огляду; видачу токена світлової сесії; однократне створення події перевищення; подію температури лише при виході за межі діапазону; розрахунок агрегатів за київською добою без дублювання; дорахунок пропущених дат і видалення вимірювань, старших за період зберігання; зведення вимірювань для графіка за 24 години; застосування змінених системних параметрів без перезапуску та відхилення некоректного файлу параметрів; заборону блокування й видалення власного облікового запису; доступ до лічильників моніторингу лише для адміністратора.
+Результат виконання команди npm test (див. рисунок 1):
+
+Рисунок 1 - Результат виконання автоматичних тестів
+
+Додатково бізнес-процеси й функції адміністрування перевірено вручну засобами Swagger UI (адреса /api-docs): бронювання, поселення за QR-кодом з отриманням токена світлової сесії, надсилання вимірювань із переходом станів normal, warning і violation, перегляд пояснень, розрахунок агрегатів, зміна ролей, блокування користувачів, редагування лімітів, зміну системних параметрів без перезапуску сервера, перегляд графіка ресурсної панелі, журналу дій і лічильників моніторингу.
+
+4. Висновки
+У ході роботи розроблено бізнес-логіку та функції адміністрування серверної частини системи HabiCore. Реалізовано правила бронювання, поселення та виселення за QR-кодом з оглядом кімнати в одній транзакції і видачею токена світлової сесії, потокову обробку вимірювань з обліком витрати води та світла на бронювання й виявленням перевищень, пояснення перевищень зовнішньою мовною моделлю з шаблонним резервним варіантом, нічний розрахунок добових агрегатів із дорахунком пропущених дат, зберігання сирих вимірювань протягом заданого періоду, дані для графіка ресурсної панелі та автоматичну зміну статусів бронювань. Реалізовано функції адміністрування: керування користувачами та ролями із захистом від втрати доступу, редагування ресурсних лімітів, журнал дій з описом змін і фільтрацією за періодом, моніторинг активності з переліком останніх перевищень, перегляд і застосування системних параметрів без перезапуску сервера. Побудовано UML-діаграму діяльності та UML-діаграми взаємодії. Бізнес-правила винесено в окремі модулі й перевірено модульними тестами, а взаємодію з клієнтами та БД - інтеграційними тестами (214 тестів). Сервер повертає пристрою ліміти, стан, дозволені режими світла й номер активного бронювання, а мобільному застосунку - токен світлової сесії, що є основою для розроблення IoT-клієнта (лабораторна робота №4).
+
+5. Перелік джерел посилання
+1. Nesterovych E. Vision and Scope Document for HabiCore: Software System for Resource Management of a Training Habitat Module. Version 1.0. Kharkiv: KhNURE, 2026. 30.10.2026.
+2. Sequelize. Documentation (v6). Transactions. URL: https://sequelize.org/docs/v6/other-topics/transactions/ (дата звернення: 21.11.2026).
+3. Express. Documentation. URL: https://expressjs.com (дата звернення: 21.11.2026).
+4. Google. Gemini API. Text generation. URL: https://ai.google.dev/gemini-api/docs/text-generation (дата звернення: 21.11.2026).
+5. MDN Web Docs. Intl.DateTimeFormat. URL: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat (дата звернення: 21.11.2026).
+6. Node.js. Test runner. URL: https://nodejs.org/api/test.html (дата звернення: 21.11.2026).
+7. Object Management Group. Unified Modeling Language Specification. Version 2.5.1. URL: https://www.omg.org/spec/UML/2.5.1 (дата звернення: 21.11.2026).
+8. Node.js. Crypto: crypto.createHmac(). URL: https://nodejs.org/api/crypto.html (дата звернення: 24.11.2026).
+ДОДАТОК А
+Правила бізнес-логіки
+
+Файл src/services/booking-rules.js
+'use strict';
+
+const { createHmac } = require('node:crypto');
+const { HttpError } = require('../middleware/errors');
+
+// Правила бронювання. Функції не звертаються до БД: отримують дані
+// та поточний час і або нічого не повертають, або кидають HttpError.
+
+const MS_IN_MINUTE = 60 * 1000;
+const MS_IN_HOUR = 60 * MS_IN_MINUTE;
+const LIGHT_TOKEN_LENGTH = 16;
+
+// Перевірка часу бронювання: кінець після початку, тривалість у межах
+// від minBookingHours до maxBookingHours, початок не в минулому
+// (для нового бронювання або при зміні часу початку)
+function checkBookingTimes({ start, end, now, config, isStartChanged }) {
+  if (end <= start) {
+    throw new HttpError(400, 'endTime must be later than startTime');
+  }
+  const minHours = config.minBookingHours || 0;
+  if (end - start < minHours * MS_IN_HOUR) {
+    throw new HttpError(400, `Booking duration must be at least ${minHours} hour(s)`);
+  }
+  if (end - start > config.maxBookingHours * MS_IN_HOUR) {
+    throw new HttpError(400, `Booking duration must not exceed ${config.maxBookingHours} hours`);
+  }
+  if (isStartChanged && start <= now) {
+    throw new HttpError(400, 'startTime must be in the future');
+  }
+}
+
+// Мешканець може мати не більше maxActiveBookingsPerUser поточних і майбутніх бронювань
+function checkActiveBookingsLimit(activeCount, config) {
+  if (activeCount >= config.maxActiveBookingsPerUser) {
+    throw new HttpError(
+      409,
+      `A user can have no more than ${config.maxActiveBookingsPerUser} active and future bookings`,
+    );
+  }
+}
+
+// Вікно поселення: від checkInBeforeMinutes до початку
+// до checkInAfterMinutes після початку (але не пізніше кінця бронювання)
+function checkInWindow(booking, config) {
+  const start = new Date(booking.startTime).getTime();
+  const end = new Date(booking.endTime).getTime();
+
+  return {
+    opensAt: new Date(start - config.checkInBeforeMinutes * MS_IN_MINUTE),
+    closesAt: new Date(Math.min(start + config.checkInAfterMinutes * MS_IN_MINUTE, end)),
+  };
+}
+
+function checkCanCheckIn({ booking, room, qrToken, now, config }) {
+  if (booking.status !== 'created') {
+    throw new HttpError(409, 'Only bookings with status "created" can be checked in');
+  }
+  if (!qrToken || qrToken !== room.qrToken) {
+    throw new HttpError(400, 'QR code does not belong to the booked room');
+  }
+
+  const { opensAt, closesAt } = checkInWindow(booking, config);
+  if (now < opensAt || now > closesAt) {
+    throw new HttpError(
+      409,
+      `Check-in is allowed from ${opensAt.toISOString()} to ${closesAt.toISOString()}`,
+    );
+  }
+}
+
+function checkCanCheckOut(booking) {
+  if (booking.status !== 'active') {
+    throw new HttpError(409, 'Only active bookings can be checked out');
+  }
+}
+
+// Бронювання, на яке не поселилися вчасно, скасовується автоматично
+function isNoShow(booking, now, config) {
+  const { closesAt } = checkInWindow(booking, config);
+  return booking.status === 'created' && now > closesAt;
+}
+
+// Активне бронювання автоматично завершується в момент закінчення
+function isExpired(booking, now) {
+  return booking.status === 'active' && now >= new Date(booking.endTime);
+}
+
+// Токен світлової сесії для BLE. Видається мешканцю під час поселення.
+// Пристрій знає свій ключ і номер активного бронювання (з відповіді сервера),
+// тому сам обчислює такий самий токен і перевіряє BLE-команду без звернення до сервера.
+// Токен дійсний, лише поки це бронювання активне в кімнаті.
+function lightSessionToken(deviceKey, bookingId) {
+  return createHmac('sha256', String(deviceKey))
+    .update(`light-session:${bookingId}`)
+    .digest('hex')
+    .slice(0, LIGHT_TOKEN_LENGTH);
+}
+
+module.exports = {
+  checkBookingTimes,
+  lightSessionToken,
+  checkActiveBookingsLimit,
+  checkInWindow,
+  checkCanCheckIn,
+  checkCanCheckOut,
+  isNoShow,
+  isExpired,
+};
+
+
+Файл src/services/resources.js
+'use strict';
+
+// Правила обліку ресурсів. Модуль не звертається до БД,
+// тому його функції легко перевіряти модульними тестами.
+
+const LIGHT_MODES = ['off', 'low', 'medium', 'high'];
+const MS_IN_HOUR = 3600 * 1000;
+
+const round = (value, digits = 4) => {
+const factor = 10 ** digits;
+return Math.round(value * factor) / factor;
+};
+
+const average = (values) => round(values.reduce((sum, v) => sum + v, 0) / values.length, 2);
+
+// Витрата води та світла між двома сусідніми вимірюваннями.
+// Вода - це зменшення рівня в ємності, світло - потужність режиму, помножена на час.
+function usageBetween(prev, curr, config) {
+if (!prev) {
+return { water: 0, light: 0 };
+}
+
+const water = Math.max(0, prev.waterLevel - curr.waterLevel);
+
+// Якщо зв'язок пропадав надовго, рахуємо не більше maxMeasurementGapSeconds
+const gapMs = new Date(curr.measuredAt) - new Date(prev.measuredAt);
+const countedMs = Math.min(Math.max(gapMs, 0), config.maxMeasurementGapSeconds * 1000);
+const power = config.lightModePower[prev.lightMode] || 0;
+const light = (power * countedMs) / MS_IN_HOUR;
+
+return { water: round(water), light: round(light) };
+}
+
+function isTemperatureOutOfRange(temperature, room) {
+return temperature < room.tempMin || temperature > room.tempMax;
+}
+
+// Частка використаного ліміту (1 = використано весь ліміт)
+function usageRatio(used, limit) {
+if (limit <= 0) {
+return used > 0 ? Infinity : 0;
+}
+return used / limit;
+}
+
+// Знаходить нові перевищення після обробки вимірювання.
+// usageBefore/usageAfter - накопичена витрата бронювання до та після вимірювання
+// (null, якщо активного бронювання немає).
+function detectViolations({ room, prev, curr, usageBefore, usageAfter }) {
+const violations = [];
+
+if (usageAfter) {
+const resources = [
+{ resource: 'water', key: 'water', limit: room.waterLimit },
+{ resource: 'light', key: 'light', limit: room.lightLimit },
+];
+
+// Подія створюється один раз - у момент, коли витрата вперше перевищує ліміт
+for (const { resource, key, limit } of resources) {
+if (usageBefore[key] <= limit && usageAfter[key] > limit) {
+violations.push({ resource, limitValue: limit, actualValue: usageAfter[key] });
+}
+}
+}
+
+// Температура: подія створюється при виході за межі діапазону
+const isOutNow = isTemperatureOutOfRange(curr.temperature, room);
+const wasOut = prev ? isTemperatureOutOfRange(prev.temperature, room) : false;
+if (isOutNow && !wasOut) {
+const limitValue = curr.temperature > room.tempMax ? room.tempMax : room.tempMin;
+violations.push({ resource: 'temperature', limitValue, actualValue: curr.temperature });
+}
+
+return violations;
+}
+
+// Стан кімнати для індикації: normal, warning (використано більше порогу) або violation
+function evaluateState({ room, usage, temperature, warningRatio }) {
+const isTempOut = temperature !== null && temperature !== undefined
+&& isTemperatureOutOfRange(temperature, room);
+
+const ratios = usage
+? [usageRatio(usage.water, room.waterLimit), usageRatio(usage.light, room.lightLimit)]
+: [];
+
+if (isTempOut || ratios.some((ratio) => ratio > 1)) {
+return 'violation';
+}
+if (ratios.some((ratio) => ratio >= warningRatio)) {
+return 'warning';
+}
+return 'normal';
+}
+
+// Дозволені режими світла залежать від залишку ліміту світла.
+// Без активного бронювання світло вмикати не можна.
+function allowedLightModes({ room, usage, warningRatio }) {
+if (!usage) {
+return ['off'];
+}
+
+const ratio = usageRatio(usage.light, room.lightLimit);
+if (ratio >= 1) {
+return ['off'];
+}
+if (ratio >= warningRatio) {
+return ['off', 'low'];
+}
+return [...LIGHT_MODES];
+}
+
+// Використання лімітів бронювання (для ресурсної панелі та Android-застосунку)
+function limitUsage(room, booking) {
+const describe = (used, limit) => ({
+used: round(used, 2),
+limit,
+left: round(Math.max(0, limit - used), 2),
+percent: limit > 0 ? Math.round((used / limit) * 100) : 0,
+});
+
+return {
+water: describe(booking.waterUsed, room.waterLimit),
+light: describe(booking.lightUsed, room.lightLimit),
+};
+}
+
+// Добовий агрегат за вимірюваннями однієї кімнати (відсортованими за часом)
+function computeDailyAggregate(measurements, config) {
+if (measurements.length === 0) {
+return null;
+}
+
+const temps = measurements.map((m) => m.temperature);
+const lights = measurements.map((m) => m.illuminance);
+
+let waterUsed = 0;
+let lightUsage = 0;
+for (let i = 1; i < measurements.length; i += 1) {
+const usage = usageBetween(measurements[i - 1], measurements[i], config);
+waterUsed += usage.water;
+lightUsage += usage.light;
+}
+
+return {
+tempMin: Math.min(...temps),
+tempMax: Math.max(...temps),
+tempAvg: average(temps),
+lightMin: Math.min(...lights),
+lightMax: Math.max(...lights),
+lightAvg: average(lights),
+waterUsed: round(waterUsed, 2),
+lightUsage: round(lightUsage, 2),
+};
+}
+
+// Зведення вимірювань (відсортованих за часом) у проміжки по bucketMinutes хвилин
+// від моменту fromMs - точки графіка ресурсної панелі. Для кожного проміжку:
+// середні температура й освітленість, останні рівень води та режим світла.
+function bucketMeasurements(measurements, fromMs, bucketMinutes) {
+const sizeMs = bucketMinutes * 60 * 1000;
+const buckets = new Map();
+
+for (const m of measurements) {
+const index = Math.floor((new Date(m.measuredAt).getTime() - fromMs) / sizeMs);
+if (index < 0) {
+continue;
+}
+if (!buckets.has(index)) {
+buckets.set(index, []);
+}
+buckets.get(index).push(m);
+}
+
+return [...buckets.entries()]
+.sort((a, b) => a[0] - b[0])
+.map(([index, items]) => {
+const last = items[items.length - 1];
+return {
+from: new Date(fromMs + index * sizeMs),
+temperature: average(items.map((m) => m.temperature)),
+illuminance: average(items.map((m) => m.illuminance)),
+waterLevel: last.waterLevel,
+lightMode: last.lightMode,
+count: items.length,
+};
+});
+}
+
+module.exports = {
+LIGHT_MODES,
+usageBetween,
+isTemperatureOutOfRange,
+detectViolations,
+evaluateState,
+allowedLightModes,
+limitUsage,
+computeDailyAggregate,
+bucketMeasurements,
+round,
+};
+
+
+Файл src/services/request-rules.js
+'use strict';
+
+const { HttpError } = require('../middleware/errors');
+
+// Дозволені переходи статусу сервісної заявки: new -> in_progress -> resolved
+// (заявку можна одразу закрити зі статусу new). Повернення назад заборонене.
+const NEXT_STATUSES = {
+  new: ['in_progress', 'resolved'],
+  in_progress: ['resolved'],
+  resolved: [],
+};
+
+function checkStatusChange(currentStatus, newStatus) {
+  // Невідомий статус відхилить валідація моделі (400)
+  const isKnownStatus = Object.hasOwn(NEXT_STATUSES, newStatus);
+  if (!isKnownStatus || newStatus === currentStatus) {
+    return;
+  }
+
+  const allowed = NEXT_STATUSES[currentStatus] || [];
+  if (!allowed.includes(newStatus)) {
+    throw new HttpError(409, `Status cannot be changed from "${currentStatus}" to "${newStatus}"`);
+  }
+}
+
+module.exports = { checkStatusChange };
+
+ДОДАТОК Б
+Потокова та пакетна обробка даних
+
+Файл src/services/measurements.js
+'use strict';
+
+const { Op } = require('sequelize');
+const { HttpError } = require('../middleware/errors');
+const { parseDate, requireNumber, Mutex } = require('../utils');
+const resources = require('./resources');
+
+// Потокова обробка вимірювань: перевірка, збереження в архів,
+// облік витрати активного бронювання, виявлення перевищень.
+function createMeasurementService({ models, config, explainer }) {
+const { Booking, Measurement, LimitViolation } = models;
+
+// Вимірювання обробляються по черзі, щоб витрата бронювання не губилася
+const lock = new Mutex();
+
+const findActiveBooking = (roomId, at) => Booking.findOne({
+where: {
+roomId,
+status: 'active',
+startTime: { [Op.lte]: at },
+endTime: { [Op.gte]: at },
+},
+});
+
+// Попереднє вимірювання кімнати (потрібне для розрахунку витрати та переходів температури)
+const findPrevious = (roomId, at) => Measurement.findOne({
+where: { roomId, measuredAt: { [Op.lt]: at } },
+order: [['measuredAt', 'DESC']],
+});
+
+const parseInput = (body) => {
+const lightMode = body.lightMode === undefined ? 'off' : body.lightMode;
+if (!resources.LIGHT_MODES.includes(lightMode)) {
+throw new HttpError(400, `Field "lightMode" must be one of: ${resources.LIGHT_MODES.join(', ')}`);
+}
+
+return {
+measuredAt: body.measuredAt ? parseDate(body.measuredAt, 'measuredAt') : new Date(),
+waterLevel: requireNumber(body.waterLevel, 'waterLevel'),
+illuminance: requireNumber(body.illuminance, 'illuminance'),
+temperature: requireNumber(body.temperature, 'temperature'),
+lightMode,
+};
+};
+
+// Відповідь для пристрою: ліміти, стан індикації та дозволені режими світла
+const describeRoomState = (room, booking, temperature) => {
+const usage = booking ? { water: booking.waterUsed, light: booking.lightUsed } : null;
+const warningRatio = config.limitWarningRatio;
+
+return {
+limits: {
+waterLimit: room.waterLimit,
+lightLimit: room.lightLimit,
+tempMin: room.tempMin,
+tempMax: room.tempMax,
+},
+activeBookingId: booking ? booking.id : null,
+usage: booking ? resources.limitUsage(room, booking) : null,
+state: resources.evaluateState({ room, usage, temperature, warningRatio }),
+allowedLightModes: resources.allowedLightModes({ room, usage, warningRatio }),
+};
+};
+
+async function processMeasurement(room, body) {
+const input = parseInput(body || {});
+
+const result = await lock.run(async () => {
+const booking = await findActiveBooking(room.id, input.measuredAt);
+const prev = await findPrevious(room.id, input.measuredAt);
+
+const measurement = await Measurement.create({
+roomId: room.id,
+bookingId: booking ? booking.id : null,
+...input,
+});
+
+// Витрата рахується лише між вимірюваннями одного бронювання
+let usageBefore = null;
+let usageAfter = null;
+if (booking) {
+const prevInBooking = prev && prev.bookingId === booking.id ? prev : null;
+const delta = resources.usageBetween(prevInBooking, measurement, config);
+
+usageBefore = { water: booking.waterUsed, light: booking.lightUsed };
+usageAfter = {
+water: resources.round(usageBefore.water + delta.water),
+light: resources.round(usageBefore.light + delta.light),
+};
+await booking.update({ waterUsed: usageAfter.water, lightUsed: usageAfter.light });
+}
+
+const found = resources.detectViolations({
+room, prev, curr: measurement, usageBefore, usageAfter,
+});
+
+const violations = [];
+for (const violation of found) {
+violations.push(await LimitViolation.create({
+roomId: room.id,
+bookingId: booking ? booking.id : null,
+detectedAt: measurement.measuredAt,
+...violation,
+}));
+}
+
+return { measurement, booking, violations };
+});
+
+// Подія вже збережена й видна в панелі, пояснення додається у фоні
+for (const violation of result.violations) {
+explainer.explain(violation.id).catch((err) => {
+console.error(`Explanation for violation ${violation.id} failed: ${err.message}`);
+});
+}
+
+// Поля вимірювання залишаються на верхньому рівні (як у попередній версії API)
+return {
+...result.measurement.toJSON(),
+violations: result.violations.map((v) => ({
+id: v.id, resource: v.resource, limitValue: v.limitValue, actualValue: v.actualValue,
+})),
+...describeRoomState(room, result.booking, input.temperature),
+};
+}
+
+// Поточний стан ресурсів кімнати для ресурсної панелі та Android-застосунку
+async function getRoomResources(room) {
+const lastMeasurement = await Measurement.findOne({
+where: { roomId: room.id },
+order: [['measuredAt', 'DESC']],
+});
+const booking = await Booking.findOne({ where: { roomId: room.id, status: 'active' } });
+const temperature = lastMeasurement ? lastMeasurement.temperature : null;
+
+return {
+roomId: room.id,
+lastMeasurement,
+...describeRoomState(room, booking, temperature),
+};
+}
+
+// Історія вимірювань кімнати за останні hours годин, зведена в проміжки
+// по bucketMinutes хвилин (графік ресурсної панелі, за замовчуванням 24 години)
+async function getRoomHistory(room, { hours, bucketMinutes, now = new Date() }) {
+const to = now;
+const from = new Date(now.getTime() - hours * 3600 * 1000);
+
+const measurements = await Measurement.findAll({
+attributes: ['measuredAt', 'waterLevel', 'illuminance', 'temperature', 'lightMode'],
+where: { roomId: room.id, measuredAt: { [Op.gte]: from, [Op.lte]: to } },
+order: [['measuredAt', 'ASC']],
+});
+
+return {
+roomId: room.id,
+from,
+to,
+bucketMinutes,
+items: resources.bucketMeasurements(measurements, from.getTime(), bucketMinutes),
+};
+}
+
+return { processMeasurement, getRoomResources, getRoomHistory };
+}
+
+module.exports = { createMeasurementService };
+
+
+Файл src/services/aggregates.js
+'use strict';
+
+const { Op } = require('sequelize');
+const { HttpError } = require('../middleware/errors');
+const { dayRange, localDateTime, previousDate, shiftDate } = require('../utils');
+const { computeDailyAggregate } = require('./resources');
+
+// Пакетна обробка: розрахунок добових агрегатів для кожної кімнати
+// та зберігання архіву сирих вимірювань протягом measurementRetentionDays діб
+function createAggregateService({ models, config }) {
+const { Room, Measurement, DailyAggregate } = models;
+
+const today = (now = new Date()) => localDateTime(now, config.timeZone).date;
+
+// Найраніша дата, за яку ще зберігаються сирі вимірювання
+const retentionStartDate = (todayDate) => shiftDate(todayDate, -config.measurementRetentionDays);
+
+// Розраховує (або перераховує) агрегати за дату YYYY-MM-DD за київським часом
+async function calculateForDate(date) {
+const { from, to } = dayRange(date, config.timeZone);
+const rooms = await Room.findAll({ order: [['id', 'ASC']] });
+const results = [];
+
+for (const room of rooms) {
+const measurements = await Measurement.findAll({
+where: { roomId: room.id, measuredAt: { [Op.gte]: from, [Op.lt]: to } },
+order: [['measuredAt', 'ASC']],
+});
+
+const values = computeDailyAggregate(measurements, config);
+if (!values) {
+continue;
+}
+
+const [aggregate, isCreated] = await DailyAggregate.findOrCreate({
+where: { roomId: room.id, date },
+defaults: values,
+});
+if (!isCreated) {
+await aggregate.update(values);
+}
+results.push(aggregate);
+}
+
+return results;
+}
+
+// Повторний розрахунок можливий лише за дати, сирі вимірювання яких ще зберігаються
+function checkDateInRetention(date, now = new Date()) {
+const startDate = retentionStartDate(today(now));
+if (date < startDate) {
+throw new HttpError(
+400,
+`Raw measurements are kept for ${config.measurementRetentionDays} days; the date must not be earlier than ${startDate}`,
+);
+}
+}
+
+// Видаляє сирі вимірювання, старші за період зберігання (агрегати зберігаються без обмеження)
+async function purgeOldMeasurements(now = new Date()) {
+const { from } = dayRange(retentionStartDate(today(now)), config.timeZone);
+return Measurement.destroy({ where: { measuredAt: { [Op.lt]: from } } });
+}
+
+// Нічне завдання: агрегати за попередню добу, дорахунок дат, пропущених,
+// поки сервер був вимкнений (якщо вимірювання ще зберігаються), і очищення архіву
+async function runNightly(now = new Date()) {
+const yesterday = previousDate(today(now));
+const calculated = [];
+
+for (let date = retentionStartDate(today(now)); date <= yesterday; date = shiftDate(date, 1)) {
+const isMissing = await DailyAggregate.count({ where: { date } }) === 0;
+if (date === yesterday || isMissing) {
+const items = await calculateForDate(date);
+if (date === yesterday || items.length > 0) {
+calculated.push({ date, rooms: items.length });
+}
+}
+}
+
+const purged = await purgeOldMeasurements(now);
+return { calculated, purged };
+}
+
+return { calculateForDate, checkDateInRetention, purgeOldMeasurements, runNightly };
+}
+
+module.exports = { createAggregateService };
+
+
+Файл src/services/booking-jobs.js
+'use strict';
+
+const { Op } = require('sequelize');
+const { isNoShow, isExpired } = require('./booking-rules');
+
+// Автоматична зміна статусів бронювань (запускається планувальником щохвилини)
+function createBookingJobs({ models, config, log }) {
+  const { Booking } = models;
+
+  // Дії планувальника записуються в журнал без користувача (userId = null)
+  const systemRequest = {};
+
+  async function updateBookingStatuses(now = new Date()) {
+    let cancelled = 0;
+    let completed = 0;
+
+    // Не поселилися вчасно - бронювання скасовується з причиною no-show
+    const notStarted = await Booking.findAll({
+      where: { status: 'created', startTime: { [Op.lt]: now } },
+    });
+    for (const booking of notStarted) {
+      if (isNoShow(booking, now, config)) {
+        await booking.update({ status: 'cancelled', cancelReason: 'no-show' });
+        await log(systemRequest, 'auto_cancel', 'Booking', booking.id, 'no-show');
+        cancelled += 1;
+      }
+    }
+
+    // Час бронювання минув - активне бронювання завершується
+    const active = await Booking.findAll({
+      where: { status: 'active', endTime: { [Op.lte]: now } },
+    });
+    for (const booking of active) {
+      if (isExpired(booking, now)) {
+        await booking.update({ status: 'completed' });
+        await log(systemRequest, 'auto_complete', 'Booking', booking.id, 'end time reached');
+        completed += 1;
+      }
+    }
+
+    return { cancelled, completed };
+  }
+
+  return { updateBookingStatuses };
+}
+
+module.exports = { createBookingJobs };
+
+
+Файл src/services/scheduler.js
+'use strict';
+
+const { localDateTime } = require('../utils');
+
+const TICK_MS = 60 * 1000;
+
+// Планувальник фонових завдань:
+// - щохвилини оновлює статуси бронювань (no-show та завершення);
+// - щоночі після nightlyJobTime (00:05 за Києвом) рахує агрегати за попередню добу,
+//   дораховує пропущені дати та видаляє застарілі сирі вимірювання.
+//   Якщо сервер запущено після nightlyJobTime, завдання виконується одразу під час запуску.
+function startScheduler({ services, config, log }) {
+let lastNightlyRun = null;
+
+async function runNightly(now) {
+const { calculated, purged } = await services.aggregates.runNightly(now);
+
+for (const { date, rooms } of calculated) {
+await log({}, 'calculate_aggregates', 'DailyAggregate', null, `${date}: ${rooms} rooms`);
+}
+if (purged > 0) {
+await log({}, 'purge_measurements', 'Measurement', null, `${purged} records older than retention period`);
+}
+}
+
+async function tick() {
+const now = new Date();
+await services.bookingJobs.updateBookingStatuses(now);
+
+const local = localDateTime(now, config.timeZone);
+if (lastNightlyRun !== local.date && local.time >= config.nightlyJobTime) {
+lastNightlyRun = local.date;
+await runNightly(now);
+}
+}
+
+const run = () => tick().catch((err) => console.error('Scheduler error:', err));
+run();
+return setInterval(run, TICK_MS);
+}
+
+module.exports = { startScheduler };
+
+ДОДАТОК В
+Пояснення перевищень лімітів
+
+Файл src/services/explanations.js
+'use strict';
+
+const { localDateTime } = require('../utils');
+
+// Пояснення перевищення ліміту: спочатку зовнішня LLM (Google Gemini),
+// а якщо вона недоступна або відповідь некоректна - шаблонний текст.
+
+const MAX_EXPLANATION_LENGTH = 600;
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+
+const RESOURCE_NAMES = {
+water: 'вода',
+light: 'світло',
+temperature: 'температура',
+};
+
+// Технічний опис події без персональних даних (лише ідентифікатор бронювання):
+// кімната, ресурс, ліміт, фактичне значення, час, витрата бронювання, режим світла
+function buildEventDescription(violation, room, booking, lightMode = null) {
+return {
+room: room.name,
+resource: violation.resource,
+limit: violation.limitValue,
+actual: violation.actualValue,
+detectedAt: new Date(violation.detectedAt).toISOString(),
+bookingId: violation.bookingId || null,
+bookingUsage: booking ? { water: booking.waterUsed, light: booking.lightUsed } : null,
+lightMode,
+temperatureRange: [room.tempMin, room.tempMax],
+};
+}
+
+function templateExplanation(event) {
+const where = `у кімнаті «${event.room}»`;
+
+if (event.resource === 'temperature') {
+const isHot = event.actual > event.limit;
+const reason = isHot
+? 'Імовірна причина - перегрів приміщення або тривала робота яскравого світла.'
+: 'Імовірна причина - охолодження приміщення або відкритий доступ холодного повітря.';
+return `Температура ${where} становить ${event.actual} °C і вийшла за допустимий діапазон `
++ `${event.temperatureRange[0]}-${event.temperatureRange[1]} °C. ${reason} `
++ 'Порада: перевірити умови в кімнаті та повідомити адміністратора, якщо стан не зміниться.';
+}
+
+const name = RESOURCE_NAMES[event.resource];
+const advice = event.resource === 'water'
+? 'Порада: зменшити витрату води та перевірити, чи немає протікання.'
+: 'Порада: перейти на режим «low» або вимкнути світло, коли воно не потрібне.';
+return `Перевищено ліміт ресурсу «${name}» ${where}: використано ${event.actual} `
++ `при ліміті ${event.limit}. Імовірна причина - інтенсивне використання ресурсу `
++ `протягом бронювання. ${advice}`;
+}
+
+function buildPrompt(event) {
+return 'Ти помічник адміністратора навчального житлового модуля. '
++ 'Поясни українською мовою, коротко (до 500 символів, без розмітки), '
++ 'чому могло статися перевищення ресурсного ліміту, і дай одну практичну пораду. '
++ 'Використовуй лише наведені дані, нічого не вигадуй.\n'
++ `Дані події (JSON): ${JSON.stringify(event)}`;
+}
+
+// Відповідь LLM приймається, лише якщо це непорожній текст не довший за 600 символів
+function isValidExplanation(text) {
+return typeof text === 'string'
+&& text.trim().length > 0
+&& text.trim().length <= MAX_EXPLANATION_LENGTH;
+}
+
+async function askGemini(prompt, config, fetchImpl) {
+const url = `${GEMINI_URL}/${config.llmModel}:generateContent`;
+const response = await fetchImpl(url, {
+method: 'POST',
+headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.llmApiKey },
+body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+signal: AbortSignal.timeout(config.llmTimeoutMs),
+});
+
+if (!response.ok) {
+throw new Error(`LLM answered with HTTP ${response.status}`);
+}
+
+const data = await response.json();
+const parts = data?.candidates?.[0]?.content?.parts || [];
+return parts.map((part) => part.text || '').join('').trim();
+}
+
+// Створює сервіс, який додає пояснення до вже збереженої події перевищення
+function createExplainer({ models, config, fetchImpl = fetch }) {
+// Лічильник звернень до LLM за поточну добу (обмеження безкоштовної квоти)
+const usage = { date: null, count: 0 };
+
+const canUseLlm = (now) => {
+const today = localDateTime(now, config.timeZone).date;
+if (usage.date !== today) {
+usage.date = today;
+usage.count = 0;
+}
+return Boolean(config.llmApiKey) && usage.count < config.llmDailyLimit;
+};
+
+async function explain(violationId, now = new Date()) {
+const violation = await models.LimitViolation.findByPk(violationId);
+const room = await models.Room.findByPk(violation.roomId);
+const booking = violation.bookingId ? await models.Booking.findByPk(violation.bookingId) : null;
+// Режим світла в момент виявлення - з вимірювання, яке спричинило подію
+const measurement = await models.Measurement.findOne({
+where: { roomId: violation.roomId, measuredAt: violation.detectedAt },
+});
+const lightMode = measurement ? measurement.lightMode : null;
+const event = buildEventDescription(violation, room, booking, lightMode);
+
+let text = null;
+let source = 'template';
+
+if (canUseLlm(now)) {
+usage.count += 1;
+try {
+const answer = await askGemini(buildPrompt(event), config, fetchImpl);
+if (isValidExplanation(answer)) {
+text = answer.trim();
+source = 'llm';
+}
+} catch (err) {
+console.warn(`LLM is not available, template is used: ${err.message}`);
+}
+}
+
+if (!text) {
+text = templateExplanation(event);
+}
+
+await violation.update({ explanation: text.slice(0, MAX_EXPLANATION_LENGTH), explanationSource: source });
+return violation;
+}
+
+return { explain };
+}
+
+module.exports = {
+buildEventDescription,
+templateExplanation,
+buildPrompt,
+isValidExplanation,
+createExplainer,
+};
+
+ДОДАТОК Г
+Маршрути бізнес-процесів і адміністрування
+
+Файл src/routes/bookings.js
+'use strict';
+
+const { Op } = require('sequelize');
+const { buildCrud } = require('../crud');
+const { HttpError, asyncHandler } = require('../middleware/errors');
+const { parseDate, requireInteger, Mutex } = require('../utils');
+const rules = require('../services/booking-rules');
+
+const BUSY_STATUSES = ['created', 'active'];
+
+module.exports = ({ models, config, auth, log }) => {
+  const { Booking, Room, Inspection } = models;
+  const { sequelize } = Booking;
+
+  // Мьютекс не дає двом запитам одночасно забронювати одну кімнату
+  const lock = new Mutex();
+
+  const isAdmin = (req) => req.user.role === 'admin';
+
+  // Перевіряє відсутність перетину з іншими бронюваннями кімнати
+  const checkOverlap = async (roomId, start, end, status, selfId) => {
+    // Скасовані та завершені бронювання кімнату не займають
+    if (!BUSY_STATUSES.includes(status)) {
+      return;
+    }
+
+    const where = {
+      roomId,
+      status: { [Op.in]: BUSY_STATUSES },
+      startTime: { [Op.lt]: end },
+      endTime: { [Op.gt]: start },
+    };
+    if (selfId) {
+      where.id = { [Op.ne]: selfId };
+    }
+
+    const overlapping = await Booking.findOne({ where });
+    if (overlapping) {
+      throw new HttpError(409, 'The room is already booked for this time');
+    }
+  };
+
+  // Скільки поточних і майбутніх бронювань уже має користувач
+  const countActiveBookings = (userId, now) => Booking.count({
+    where: { userId, status: { [Op.in]: BUSY_STATUSES }, endTime: { [Op.gt]: now } },
+  });
+
+  // Обмеження для звичайного мешканця при зміні свого бронювання
+  const checkResidentCanChange = (item, data) => {
+    if (item.status !== 'created') {
+      throw new HttpError(409, 'Only bookings with status "created" can be changed');
+    }
+
+    const triesToChangeRoom = data.roomId !== undefined;
+    const triesToSetOtherStatus = data.status && data.status !== 'cancelled';
+    if (triesToChangeRoom || triesToSetOtherStatus) {
+      throw new HttpError(403, 'Forbidden');
+    }
+
+    if (data.status === 'cancelled' && item.startTime <= new Date()) {
+      throw new HttpError(409, 'A booking can be cancelled only before it starts');
+    }
+  };
+
+  const prepare = async (req, data, item) => {
+    const now = new Date();
+
+    if (item && !isAdmin(req)) {
+      checkResidentCanChange(item, data);
+    }
+
+    if (!item) {
+      // Адміністратор може створити бронювання від імені іншого користувача
+      const forOtherUser = isAdmin(req) && req.body.userId !== undefined;
+      data.userId = forOtherUser ? requireInteger(req.body.userId, 'userId') : req.user.id;
+      data.status = 'created';
+
+      if (!isAdmin(req)) {
+        rules.checkActiveBookingsLimit(await countActiveBookings(req.user.id, now), config);
+      }
+    }
+
+    // Значення, яких немає в запиті, беремо зі збереженого бронювання
+    const roomId = requireInteger(
+      data.roomId !== undefined ? data.roomId : (item && item.roomId),
+      'roomId',
+    );
+    const start = parseDate(
+      data.startTime !== undefined ? data.startTime : (item && item.startTime),
+      'startTime',
+    );
+    const end = parseDate(
+      data.endTime !== undefined ? data.endTime : (item && item.endTime),
+      'endTime',
+    );
+    const status = data.status || (item && item.status);
+
+    rules.checkBookingTimes({
+      start, end, now, config, isStartChanged: !item || data.startTime !== undefined,
+    });
+    await checkOverlap(roomId, start, end, status, item && item.id);
+
+    // Записуємо вже перевірені та приведені значення
+    if (data.roomId !== undefined) {
+      data.roomId = roomId;
+    }
+    if (data.startTime !== undefined) {
+      data.startTime = start;
+    }
+    if (data.endTime !== undefined) {
+      data.endTime = end;
+    }
+    return data;
+  };
+
+  // Дозволяє фільтрувати бронювання, що перетинаються з проміжком from..to
+  const extraWhere = (req) => {
+    const where = {};
+    if (req.query.from) {
+      where.endTime = { [Op.gt]: parseDate(req.query.from, 'from') };
+    }
+    if (req.query.to) {
+      where.startTime = { [Op.lt]: parseDate(req.query.to, 'to') };
+    }
+    return where;
+  };
+
+  const router = buildCrud({
+    Model: Booking,
+    entity: 'Booking',
+    log,
+    lock,
+    createFields: ['roomId', 'startTime', 'endTime'],
+    updateFields: ['roomId', 'startTime', 'endTime', 'status', 'cancelReason'],
+    filterFields: ['roomId', 'userId', 'status'],
+    guards: {
+      list: [auth.authenticate],
+      get: [auth.authenticate],
+      create: [auth.authenticate],
+      update: [auth.authenticate],
+      remove: auth.adminOnly,
+    },
+    extraWhere,
+    // Мешканець бачить лише власні бронювання
+    scope: async (req) => (isAdmin(req) ? {} : { userId: req.user.id }),
+    prepare,
+  });
+
+  // ---------- Поселення та виселення ----------
+
+  const findOwnBooking = async (req) => {
+    const where = { id: req.params.id, ...(isAdmin(req) ? {} : { userId: req.user.id }) };
+    const booking = await Booking.findOne({ where });
+    if (!booking) {
+      throw new HttpError(404, 'Booking not found');
+    }
+    return booking;
+  };
+
+  // Статус бронювання та запис огляду змінюються в одній транзакції
+  const changeStatusWithInspection = (booking, status, inspection) => sequelize.transaction(
+    async (transaction) => {
+      await booking.update({ status }, { transaction });
+      const record = await Inspection.create({
+        bookingId: booking.id,
+        type: inspection.type,
+        state: inspection.state,
+        note: inspection.note,
+      }, { transaction });
+      return { booking, inspection: record };
+    },
+  );
+
+  // Поселення: Android-застосунок надсилає QR-токен кімнати та огляд кімнати
+  router.post('/:id/check-in', auth.authenticate, asyncHandler(async (req, res) => {
+    const { qrToken, state, note } = req.body || {};
+
+    const result = await lock.run(async () => {
+      const booking = await findOwnBooking(req);
+      const room = await Room.findByPk(booking.roomId);
+      rules.checkCanCheckIn({ booking, room, qrToken, now: new Date(), config });
+
+      const otherActive = await Booking.findOne({
+        where: { roomId: room.id, status: 'active', id: { [Op.ne]: booking.id } },
+      });
+      if (otherActive) {
+        throw new HttpError(409, 'Another booking is active in this room');
+      }
+
+      const changed = await changeStatusWithInspection(booking, 'active', { type: 'checkin', state, note });
+      // Токен світлової сесії: Android-застосунок передає його пристрою разом із BLE-командою
+      return { ...changed, lightToken: rules.lightSessionToken(room.deviceKey, booking.id) };
+    });
+
+    await log(req, 'check_in', 'Booking', result.booking.id);
+    res.json(result);
+  }));
+
+  // Виселення: бронювання завершується, витрата ресурсів фіксується
+  router.post('/:id/check-out', auth.authenticate, asyncHandler(async (req, res) => {
+    const { state, note } = req.body || {};
+
+    const result = await lock.run(async () => {
+      const booking = await findOwnBooking(req);
+      rules.checkCanCheckOut(booking);
+      return changeStatusWithInspection(booking, 'completed', { type: 'checkout', state, note });
+    });
+
+    const details = `waterUsed: ${result.booking.waterUsed}; lightUsed: ${result.booking.lightUsed}`;
+    await log(req, 'check_out', 'Booking', result.booking.id, details);
+    res.json(result);
+  }));
+
+  return router;
+};
+
+
+Файл src/routes/users.js
+'use strict';
+
+const bcrypt = require('bcryptjs');
+const { buildCrud } = require('../crud');
+const { HttpError } = require('../middleware/errors');
+
+const MIN_PASSWORD_LENGTH = 6;
+
+// Адміністратор не може заблокувати себе, зняти з себе роль адміністратора
+// або видалити власний обліковий запис - інакше система залишиться без адміністратора
+function checkNotSelfLockout(req, item, data) {
+  if (item.id !== req.user.id) {
+    return;
+  }
+
+  const removesOwnAdminRole = data.role !== undefined && data.role !== 'admin';
+  const blocksSelf = data.isBlocked === true;
+  if (removesOwnAdminRole || blocksSelf) {
+    throw new HttpError(409, 'You cannot block yourself or remove your own admin role');
+  }
+}
+
+// Усі операції з користувачами доступні лише адміністратору
+module.exports = ({ models, auth, log }) => buildCrud({
+  Model: models.User,
+  entity: 'User',
+  log,
+  createFields: ['email', 'displayName', 'role', 'password'],
+  updateFields: ['displayName', 'role', 'isBlocked', 'password'],
+  logFields: ['displayName', 'role', 'isBlocked', 'passwordHash'],
+  filterFields: ['role'],
+  booleanFilters: ['isBlocked'],
+  guards: {
+    list: auth.adminOnly,
+    get: auth.adminOnly,
+    create: auth.adminOnly,
+    update: auth.adminOnly,
+    remove: auth.adminOnly,
+  },
+  prepare: async (req, data, item) => {
+    if (item) {
+      checkNotSelfLockout(req, item, data);
+    }
+
+    // Пароль обов'язковий при створенні, а при оновленні - лише якщо його передали
+    const isPasswordNeeded = data.password !== undefined || !item;
+
+    if (isPasswordNeeded) {
+      if (typeof data.password !== 'string' || data.password.length < MIN_PASSWORD_LENGTH) {
+        throw new HttpError(400, 'Password must be at least 6 characters long');
+      }
+      data.passwordHash = bcrypt.hashSync(data.password, 10);
+    }
+
+    delete data.password;
+    return data;
+  },
+  beforeRemove: async (req, item) => {
+    if (item.id === req.user.id) {
+      throw new HttpError(409, 'You cannot delete your own account');
+    }
+  },
+});
+
+
+Файл src/routes/admin.js
+'use strict';
+
+const { Router } = require('express');
+const { Op } = require('sequelize');
+const { asyncHandler } = require('../middleware/errors');
+
+const RECENT_VIOLATIONS = 5;
+
+// Параметри, які не можна показувати навіть адміністратору
+const SECRET_KEYS = ['jwtSecret', 'llmApiKey'];
+
+const BOOKING_STATUSES = ['created', 'active', 'completed', 'cancelled'];
+const REQUEST_STATUSES = ['new', 'in_progress', 'resolved'];
+const MS_IN_DAY = 24 * 3600 * 1000;
+
+module.exports = ({ models, config, auth, log, services }) => {
+const router = Router();
+const { User, Room, Booking, ServiceRequest, LimitViolation, Measurement, ActionLog } = models;
+
+// Кількість записів моделі для кожного значення поля (наприклад, бронювання за статусами)
+const countBy = async (Model, field, values) => {
+const result = {};
+for (const value of values) {
+result[value] = await Model.count({ where: { [field]: value } });
+}
+return result;
+};
+
+const publicSettings = () => {
+const settings = { ...config };
+for (const key of SECRET_KEYS) {
+delete settings[key];
+}
+return settings;
+};
+
+// Поточні системні параметри (задаються у файлі settings.json)
+router.get('/settings', auth.adminOnly, (req, res) => {
+res.json({ settings: publicSettings(), llmConfigured: Boolean(config.llmApiKey) });
+});
+
+// Застосування зміненого settings.json без перезапуску сервера.
+// Некоректний файл відхиляється (400), поточні значення залишаються без змін.
+router.post('/settings/reload', auth.adminOnly, asyncHandler(async (req, res) => {
+const { changes } = services.settings.reload();
+
+await log(req, 'reload_settings', 'Settings', null, changes || 'no changes');
+res.json({ changes, settings: publicSettings() });
+}));
+
+// Моніторинг активності: лічильники користувачів, бронювань, заявок,
+// останні перевищення лімітів і події за останню добу
+router.get('/stats', auth.adminOnly, asyncHandler(async (req, res) => {
+const since = new Date(Date.now() - MS_IN_DAY);
+const last24h = { [Op.gte]: since };
+
+res.json({
+users: {
+total: await User.count(),
+...(await countBy(User, 'role', ['resident', 'admin'])),
+blocked: await User.count({ where: { isBlocked: true } }),
+},
+rooms: await Room.count(),
+bookings: await countBy(Booking, 'status', BOOKING_STATUSES),
+serviceRequests: await countBy(ServiceRequest, 'status', REQUEST_STATUSES),
+recentViolations: await LimitViolation.findAll({
+attributes: ['id', 'roomId', 'bookingId', 'resource', 'limitValue', 'actualValue', 'detectedAt'],
+order: [['detectedAt', 'DESC'], ['id', 'DESC']],
+limit: RECENT_VIOLATIONS,
+}),
+last24h: {
+since,
+violations: await LimitViolation.count({ where: { detectedAt: last24h } }),
+measurements: await Measurement.count({ where: { measuredAt: last24h } }),
+actions: await ActionLog.count({ where: { createdAt: last24h } }),
+},
+});
+}));
+
+return router;
+};
+
+Файл src/services/settings.js
+'use strict';
+
+const fs = require('node:fs');
+const { HttpError } = require('../middleware/errors');
+const { LIGHT_MODES } = require('./resources');
+
+// Параметри, які з settings.json не перечитуються без перезапуску сервера
+// (порт і каталог фото задаються під час запуску) або взагалі не задаються у файлі (секрети, шлях до БД)
+const FIXED_KEYS = ['port', 'uploadsDir', 'jwtSecret', 'llmApiKey', 'dbStorage', 'settingsFile'];
+
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function readSettingsFile(file) {
+try {
+return JSON.parse(fs.readFileSync(file, 'utf8'));
+} catch (err) {
+throw new HttpError(400, `Cannot read settings file: ${err.message}`);
+}
+}
+
+// Перевіряє нові значення параметрів. Не звертається до файлів і БД,
+// тому перевіряється модульними тестами. За помилки кидає HttpError 400.
+function validateSettings(next, current) {
+const errors = [];
+
+for (const [key, value] of Object.entries(next)) {
+if (!Object.hasOwn(current, key)) {
+errors.push(`unknown parameter "${key}"`);
+} else if (typeof value !== typeof current[key] || value === null) {
+errors.push(`"${key}" must be of type ${typeof current[key]}`);
+} else if (typeof value === 'number' && (!Number.isFinite(value) || value < 0)) {
+errors.push(`"${key}" must be a non-negative number`);
+}
+}
+
+if (errors.length === 0) {
+const s = { ...current, ...next };
+
+if (s.minBookingHours > s.maxBookingHours) {
+errors.push('minBookingHours must not exceed maxBookingHours');
+}
+if (s.maxActiveBookingsPerUser < 1 || s.measurementRetentionDays < 1) {
+errors.push('maxActiveBookingsPerUser and measurementRetentionDays must be at least 1');
+}
+if (s.defaultTempMin >= s.defaultTempMax) {
+errors.push('defaultTempMin must be less than defaultTempMax');
+}
+if (!(s.limitWarningRatio > 0 && s.limitWarningRatio <= 1)) {
+errors.push('limitWarningRatio must be in range (0, 1]');
+}
+if (!TIME_PATTERN.test(s.nightlyJobTime)) {
+errors.push('nightlyJobTime must be in format HH:MM');
+}
+const powers = s.lightModePower || {};
+if (!LIGHT_MODES.every((mode) => typeof powers[mode] === 'number' && powers[mode] >= 0)) {
+errors.push(`lightModePower must contain non-negative numbers for: ${LIGHT_MODES.join(', ')}`);
+}
+}
+
+if (errors.length > 0) {
+throw new HttpError(400, `Invalid settings: ${errors.join('; ')}`);
+}
+}
+
+// Текстовий опис змінених параметрів для журналу дій: "maxBookingHours: 24 -> 12"
+function listChanges(before, after, keys) {
+const changes = [];
+for (const key of keys) {
+const oldValue = JSON.stringify(before[key]);
+const newValue = JSON.stringify(after[key]);
+if (oldValue !== newValue) {
+changes.push(`${key}: ${oldValue} -> ${newValue}`);
+}
+}
+return changes.join('; ').slice(0, 500);
+}
+
+// Перечитує settings.json і застосовує нові значення без перезапуску сервера.
+// Усі модулі читають параметри з того самого об'єкта config у момент виконання,
+// тому зміни діють одразу.
+function createSettingsService({ config }) {
+function reload() {
+const fromFile = readSettingsFile(config.settingsFile);
+if (!fromFile || typeof fromFile !== 'object' || Array.isArray(fromFile)) {
+throw new HttpError(400, 'Settings file must contain a JSON object');
+}
+
+const applicable = {};
+for (const [key, value] of Object.entries(fromFile)) {
+if (!FIXED_KEYS.includes(key)) {
+applicable[key] = value;
+}
+}
+
+validateSettings(applicable, config);
+
+const before = { ...config };
+Object.assign(config, applicable);
+return { changes: listChanges(before, config, Object.keys(applicable)) };
+}
+
+return { reload };
+}
+
+module.exports = { FIXED_KEYS, validateSettings, listChanges, createSettingsService };
+
+
+Файл src/crud.js
+'use strict';
+
+const { Router } = require('express');
+const { Op } = require('sequelize');
+const { HttpError, asyncHandler } = require('./middleware/errors');
+const { pick, parsePaging, describeChanges } = require('./utils');
+
+const ALL_OPERATIONS = ['list', 'get', 'create', 'update', 'remove'];
+
+// Будує стандартний CRUD-роутер для моделі.
+// Особливості кожної сутності задаються через параметри (поля, guards, prepare тощо).
+function buildCrud(options) {
+  const {
+    Model,
+    entity,
+    log,
+    createFields = [],
+    updateFields = [],
+    filterFields = [],
+    booleanFilters = [],
+    extraWhere = () => ({}),
+    scope = async () => ({}),
+    prepare = async (req, data) => data,
+    serialize = (req, item) => item,
+    guards = {},
+    lock = null,
+    only = ALL_OPERATIONS,
+    order = [['id', 'ASC']],
+    logFields = updateFields,
+    beforeRemove = async () => {},
+  } = options;
+
+  const router = Router();
+
+  const guardsFor = (operation) => guards[operation] || [];
+  const runExclusively = (task) => (lock ? lock.run(task) : task());
+
+  // Шукає запис за id з урахуванням доступу користувача (scope)
+  const findOr404 = async (req) => {
+    const where = { id: req.params.id, ...(await scope(req)) };
+    const item = await Model.findOne({ where });
+    if (!item) {
+      throw new HttpError(404, `${entity} not found`);
+    }
+    return item;
+  };
+
+  // Будує умови пошуку зі звичайних і булевих query-параметрів
+  const buildFilters = (query) => {
+    const where = {};
+
+    for (const field of filterFields) {
+      const value = query[field];
+      if (value === undefined) {
+        continue;
+      }
+
+      if (typeof value !== 'string') {
+        throw new HttpError(400, `Query parameter "${field}" must be a single value`);
+      }
+      where[field] = value;
+    }
+
+    for (const field of booleanFilters) {
+      const value = query[field];
+      if (value === undefined) {
+        continue;
+      }
+
+      if (value !== 'true' && value !== 'false') {
+        throw new HttpError(400, `Query parameter "${field}" must be "true" or "false"`);
+      }
+      where[field] = value === 'true';
+    }
+
+    return where;
+  };
+
+  if (only.includes('list')) {
+    router.get('/', ...guardsFor('list'), asyncHandler(async (req, res) => {
+      // Умови поєднуються через AND, щоб обмеження доступу (scope)
+      // не затирало фільтр за тим самим полем (наприклад, bookingId)
+      const where = {
+        [Op.and]: [buildFilters(req.query), extraWhere(req), await scope(req)],
+      };
+
+      const { limit, offset } = parsePaging(req.query);
+      const { rows, count } = await Model.findAndCountAll({
+        where,
+        limit,
+        offset,
+        order,
+      });
+
+      res.json({
+        total: count,
+        limit,
+        offset,
+        items: rows.map((item) => serialize(req, item)),
+      });
+    }));
+  }
+
+  if (only.includes('get')) {
+    router.get('/:id', ...guardsFor('get'), asyncHandler(async (req, res) => {
+      const item = await findOr404(req);
+      res.json(serialize(req, item));
+    }));
+  }
+
+  if (only.includes('create')) {
+    router.post('/', ...guardsFor('create'), asyncHandler(async (req, res) => {
+      const item = await runExclusively(async () => {
+        const data = await prepare(req, pick(req.body, createFields), null);
+        const created = await Model.create(data);
+        return created.reload();
+      });
+
+      await log(req, 'create', entity, item.id);
+      res.status(201).json(serialize(req, item));
+    }));
+  }
+
+  if (only.includes('update')) {
+    router.put('/:id', ...guardsFor('update'), asyncHandler(async (req, res) => {
+      let details = '';
+      const item = await runExclusively(async () => {
+        const found = await findOr404(req);
+        // get({ plain: true }) повертає сам об'єкт dataValues, який update() змінює,
+        // тому зберігаємо копію значень до зміни
+        const before = { ...found.get({ plain: true }) };
+        const data = await prepare(req, pick(req.body, updateFields), found);
+        await found.update(data);
+        details = describeChanges(before, found.get({ plain: true }), logFields);
+        return found;
+      });
+
+      // У журнал записується, які саме поля змінилися (наприклад, роль або ліміт)
+      await log(req, 'update', entity, item.id, details);
+      res.json(serialize(req, item));
+    }));
+  }
+
+  if (only.includes('remove')) {
+    router.delete('/:id', ...guardsFor('remove'), asyncHandler(async (req, res) => {
+      const item = await findOr404(req);
+      await beforeRemove(req, item);
+      await item.destroy();
+
+      await log(req, 'delete', entity, item.id);
+      res.status(204).end();
+    }));
+  }
+
+  return router;
+}
+
+module.exports = { buildCrud };
+
+ДОДАТОК Д
+Автоматичні тести
+
+Файл test/booking-rules.test.js
+'use strict';
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const { HttpError } = require('../src/middleware/errors');
+const rules = require('../src/services/booking-rules');
+
+const config = {
+  maxBookingHours: 24, maxActiveBookingsPerUser: 2, checkInBeforeMinutes: 30, checkInAfterMinutes: 60,
+};
+const now = new Date('2030-01-01T10:00:00Z');
+const minutes = (n) => new Date(now.getTime() + n * 60 * 1000);
+
+const statusOf = (fn) => {
+  try {
+    fn();
+  } catch (e) {
+    assert.ok(e instanceof HttpError, 'очікується HttpError');
+    return e.status;
+  }
+  return null;
+};
+
+describe('checkBookingTimes', () => {
+  const check = (start, end, isStartChanged = true) => statusOf(() => rules.checkBookingTimes({
+    start, end, now, config, isStartChanged,
+  }));
+
+  it('коректне бронювання', () => assert.equal(check(minutes(60), minutes(180)), null));
+  it('кінець раніше за початок → 400', () => assert.equal(check(minutes(180), minutes(60)), 400));
+  it('тривалість понад 24 години → 400', () => assert.equal(check(minutes(60), minutes(60 + 24 * 60 + 1)), 400));
+  it('початок у минулому → 400', () => assert.equal(check(minutes(-10), minutes(60)), 400));
+  it('початок у минулому допустимий, якщо його не змінюють', () => {
+    assert.equal(check(minutes(-10), minutes(60), false), null);
+  });
+  it('тривалість менше мінімальної (1 година) → 400', () => {
+    const withMin = { ...config, minBookingHours: 1 };
+    const checkMin = (start, end) => statusOf(() => rules.checkBookingTimes({
+      start, end, now, config: withMin, isStartChanged: true,
+    }));
+    assert.equal(checkMin(minutes(60), minutes(119)), 400);
+    assert.equal(checkMin(minutes(60), minutes(120)), null);
+  });
+});
+
+describe('checkActiveBookingsLimit', () => {
+  it('менше ліміту - дозволено', () => assert.equal(statusOf(() => rules.checkActiveBookingsLimit(1, config)), null));
+  it('ліміт досягнуто → 409', () => assert.equal(statusOf(() => rules.checkActiveBookingsLimit(2, config)), 409));
+});
+
+describe('поселення', () => {
+  const room = { qrToken: 'qr-1' };
+  const booking = (extra = {}) => ({
+    status: 'created', startTime: minutes(20), endTime: minutes(140), ...extra,
+  });
+  const checkIn = (b, qrToken = 'qr-1', at = now) => statusOf(() => rules.checkCanCheckIn({
+    booking: b, room, qrToken, now: at, config,
+  }));
+
+  it('за 20 хвилин до початку з правильним QR - дозволено', () => assert.equal(checkIn(booking()), null));
+  it('чужий QR-код → 400', () => assert.equal(checkIn(booking(), 'qr-2'), 400));
+  it('раніше ніж за 30 хвилин до початку → 409', () => {
+    assert.equal(checkIn(booking({ startTime: minutes(45) })), 409);
+  });
+  it('пізніше ніж через 60 хвилин після початку → 409', () => {
+    assert.equal(checkIn(booking({ startTime: minutes(-61), endTime: minutes(120) })), 409);
+  });
+  it('вже активне бронювання → 409', () => assert.equal(checkIn(booking({ status: 'active' })), 409));
+  it('вікно поселення не виходить за кінець бронювання', () => {
+    const { closesAt } = rules.checkInWindow(booking({ startTime: minutes(0), endTime: minutes(30) }), config);
+    assert.equal(closesAt.getTime(), minutes(30).getTime());
+  });
+  it('виселення можливе лише з активного бронювання', () => {
+    assert.equal(statusOf(() => rules.checkCanCheckOut({ status: 'created' })), 409);
+    assert.equal(statusOf(() => rules.checkCanCheckOut({ status: 'active' })), null);
+  });
+});
+
+describe('автоматичні статуси', () => {
+  it('no-show після закриття вікна поселення', () => {
+    const b = { status: 'created', startTime: minutes(-61), endTime: minutes(120) };
+    assert.equal(rules.isNoShow(b, now, config), true);
+    assert.equal(rules.isNoShow({ ...b, startTime: minutes(-30) }, now, config), false);
+  });
+  it('активне бронювання завершується після кінця', () => {
+    assert.equal(rules.isExpired({ status: 'active', endTime: minutes(0) }, now), true);
+    assert.equal(rules.isExpired({ status: 'active', endTime: minutes(1) }, now), false);
+  });
+});
+
+describe('токен світлової сесії', () => {
+  it('однаковий для того самого пристрою та бронювання', () => {
+    const token = rules.lightSessionToken('device-key-1', 7);
+    assert.match(token, /^[0-9a-f]{16}$/);
+    assert.equal(rules.lightSessionToken('device-key-1', 7), token);
+  });
+  it('різний для іншого бронювання або іншого пристрою', () => {
+    const token = rules.lightSessionToken('device-key-1', 7);
+    assert.notEqual(rules.lightSessionToken('device-key-1', 8), token);
+    assert.notEqual(rules.lightSessionToken('device-key-2', 7), token);
+  });
+});
+
+
+Файл test/resources.test.js
+'use strict';
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const resources = require('../src/services/resources');
+
+const config = {
+lightModePower: { off: 0, low: 1, medium: 2, high: 3 },
+maxMeasurementGapSeconds: 300,
+};
+const room = { waterLimit: 20, lightLimit: 1, tempMin: 18, tempMax: 26 };
+const at = (minute) => new Date(Date.UTC(2030, 0, 1, 10, minute)).toISOString();
+const m = (minute, extra = {}) => ({
+measuredAt: at(minute), waterLevel: 80, illuminance: 300, temperature: 22, lightMode: 'off', ...extra,
+});
+
+describe('usageBetween: витрата між двома вимірюваннями', () => {
+it('без попереднього вимірювання витрата нульова', () => {
+assert.deepEqual(resources.usageBetween(null, m(0), config), { water: 0, light: 0 });
+});
+it('вода - це зменшення рівня', () => {
+const usage = resources.usageBetween(m(0, { waterLevel: 80 }), m(1, { waterLevel: 75.5 }), config);
+assert.equal(usage.water, 4.5);
+});
+it('поповнення ємності не рахується як витрата', () => {
+assert.equal(resources.usageBetween(m(0, { waterLevel: 50 }), m(1, { waterLevel: 90 }), config).water, 0);
+});
+it('світло рахується за режимом попереднього вимірювання і часом', () => {
+// режим high (3 од./год) протягом 4 хвилин = 0.2
+const usage = resources.usageBetween(m(0, { lightMode: 'high' }), m(4), config);
+assert.equal(usage.light, 0.2);
+});
+it('довгий проміжок без зв’язку обмежується maxMeasurementGapSeconds', () => {
+// 60 хвилин без даних, але враховується лише 5 хвилин: 3 * 5 / 60 = 0.25
+const usage = resources.usageBetween(m(0, { lightMode: 'high' }), m(60), config);
+assert.equal(usage.light, 0.25);
+});
+});
+
+describe('detectViolations: виявлення перевищень', () => {
+const detect = (args) => resources.detectViolations({ room, prev: m(0), curr: m(1), ...args });
+
+it('немає перевищень у межах лімітів', () => {
+assert.deepEqual(detect({ usageBefore: { water: 1, light: 0 }, usageAfter: { water: 2, light: 0 } }), []);
+});
+it('перевищення води фіксується в момент переходу через ліміт', () => {
+const found = detect({ usageBefore: { water: 19, light: 0 }, usageAfter: { water: 21, light: 0 } });
+assert.deepEqual(found, [{ resource: 'water', limitValue: 20, actualValue: 21 }]);
+});
+it('повторно після переходу подія не створюється', () => {
+assert.deepEqual(detect({ usageBefore: { water: 21, light: 0 }, usageAfter: { water: 23, light: 0 } }), []);
+});
+it('перевищення світла', () => {
+const found = detect({ usageBefore: { water: 0, light: 0.9 }, usageAfter: { water: 0, light: 1.1 } });
+assert.equal(found[0].resource, 'light');
+});
+it('без бронювання ліміти води і світла не перевіряються', () => {
+assert.deepEqual(detect({ usageBefore: null, usageAfter: null }), []);
+});
+it('вихід температури за верхню межу', () => {
+const found = detect({ curr: m(1, { temperature: 27.5 }) });
+assert.deepEqual(found, [{ resource: 'temperature', limitValue: 26, actualValue: 27.5 }]);
+});
+it('вихід температури за нижню межу', () => {
+assert.equal(detect({ curr: m(1, { temperature: 16 }) })[0].limitValue, 18);
+});
+it('якщо температура вже була поза межами, нова подія не створюється', () => {
+assert.deepEqual(detect({ prev: m(0, { temperature: 28 }), curr: m(1, { temperature: 29 }) }), []);
+});
+});
+
+describe('evaluateState та allowedLightModes', () => {
+const state = (usage, temperature = 22) => resources.evaluateState({
+room, usage, temperature, warningRatio: 0.8,
+});
+const modes = (usage) => resources.allowedLightModes({ room, usage, warningRatio: 0.8 });
+
+it('норма', () => assert.equal(state({ water: 5, light: 0.1 }), 'normal'));
+it('попередження після 80% ліміту', () => assert.equal(state({ water: 16, light: 0 }), 'warning'));
+it('перевищення ліміту', () => assert.equal(state({ water: 25, light: 0 }), 'violation'));
+it('температура поза діапазоном - стан violation навіть без бронювання', () => {
+assert.equal(state(null, 30), 'violation');
+});
+it('без бронювання дозволено лише вимкнене світло', () => assert.deepEqual(modes(null), ['off']));
+it('усі режими, поки ліміт світла далекий', () => {
+assert.deepEqual(modes({ water: 0, light: 0.1 }), ['off', 'low', 'medium', 'high']);
+});
+it('після 80% ліміту світла - лише off і low', () => {
+assert.deepEqual(modes({ water: 0, light: 0.85 }), ['off', 'low']);
+});
+it('ліміт світла вичерпано - лише off', () => assert.deepEqual(modes({ water: 0, light: 1 }), ['off']));
+});
+
+describe('limitUsage', () => {
+it('рахує залишок і відсоток використання', () => {
+const usage = resources.limitUsage(room, { waterUsed: 5, lightUsed: 1.5 });
+assert.deepEqual(usage.water, { used: 5, limit: 20, left: 15, percent: 25 });
+assert.deepEqual(usage.light, { used: 1.5, limit: 1, left: 0, percent: 150 });
+});
+});
+
+describe('computeDailyAggregate', () => {
+it('для порожнього списку повертає null', () => {
+assert.equal(resources.computeDailyAggregate([], config), null);
+});
+it('рахує мінімум, максимум, середнє та витрату', () => {
+const list = [
+m(0, { temperature: 20, illuminance: 100, waterLevel: 90, lightMode: 'medium' }),
+m(5, { temperature: 24, illuminance: 300, waterLevel: 85 }),
+m(10, { temperature: 22, illuminance: 200, waterLevel: 95 }),
+];
+assert.deepEqual(resources.computeDailyAggregate(list, config), {
+tempMin: 20,
+tempMax: 24,
+tempAvg: 22,
+lightMin: 100,
+lightMax: 300,
+lightAvg: 200,
+waterUsed: 5,
+lightUsage: 0.17,
+});
+});
+});
+
+describe('bucketMeasurements: точки графіка ресурсної панелі', () => {
+const fromMs = new Date(at(0)).getTime();
+it('зводить вимірювання в проміжки: середні значення, останній рівень води й режим світла', () => {
+const list = [
+m(1, { temperature: 20, illuminance: 100, waterLevel: 90 }),
+m(4, { temperature: 22, illuminance: 300, waterLevel: 85, lightMode: 'low' }),
+m(12, { temperature: 25, illuminance: 50, waterLevel: 80 }),
+];
+const points = resources.bucketMeasurements(list, fromMs, 10);
+assert.equal(points.length, 2);
+assert.deepEqual(points[0], {
+from: new Date(at(0)), temperature: 21, illuminance: 200, waterLevel: 85, lightMode: 'low', count: 2,
+});
+assert.equal(points[1].from.toISOString(), at(10));
+assert.equal(points[1].count, 1);
+});
+it('порожні проміжки пропускаються, вимірювання до початку періоду не враховуються', () => {
+const list = [m(0), m(35)];
+const points = resources.bucketMeasurements(list, fromMs + 60 * 1000, 10);
+assert.deepEqual(points.map((p) => p.from.toISOString()), [new Date(fromMs + 31 * 60 * 1000).toISOString()]);
+});
+});
+
+
+Файл test/checkin-checkout.api.test.js
+'use strict';
+
+const { describe, it, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { startTestApp } = require('../testkit/harness');
+const { lightSessionToken } = require('../src/services/booking-rules');
+
+const fromNow = (minutes) => new Date(Date.now() + minutes * 60 * 1000);
+
+describe('поселення та виселення за QR-кодом', () => {
+  let app; let resident; let other;
+  before(async () => {
+    app = await startTestApp();
+    resident = await app.createUser();
+    other = await app.createUser();
+  });
+  after(() => app.close());
+
+  const checkIn = (id, body, token = resident.token) => app.api('POST', `/api/bookings/${id}/check-in`, { token, body });
+  const checkOut = (id, body, token = resident.token) => app.api(
+    'POST', `/api/bookings/${id}/check-out`, { token, body },
+  );
+
+  // Кімната з відомим QR-токеном і бронювання, яке починається через 10 хвилин
+  const prepare = async (startIn = 10) => {
+    const room = await app.createRoom({ qrToken: app.unique('qr') });
+    const booking = await app.createBooking({
+      room, user: resident, start: fromNow(startIn), end: fromNow(startIn + 60),
+    });
+    return { room, booking };
+  };
+
+  it('поселення: бронювання стає активним, створюється огляд', async () => {
+    const { room, booking } = await prepare();
+    const r = await checkIn(booking.id, { qrToken: room.qrToken, state: 'ok', note: 'Чисто' });
+    assert.equal(r.status, 200);
+    assert.equal(r.data.booking.status, 'active');
+    assert.equal(r.data.inspection.type, 'checkin');
+    assert.equal(r.data.inspection.note, 'Чисто');
+  });
+
+  it('поселення видає токен світлової сесії для BLE', async () => {
+    const { room, booking } = await prepare();
+    const r = await checkIn(booking.id, { qrToken: room.qrToken, state: 'ok' });
+    assert.equal(r.status, 200);
+    assert.equal(r.data.lightToken, lightSessionToken(room.deviceKey, booking.id));
+  });
+
+  it('QR-код іншої кімнати → 400', async () => {
+    const { booking } = await prepare();
+    assert.equal((await checkIn(booking.id, { qrToken: 'wrong', state: 'ok' })).status, 400);
+  });
+
+  it('повторне поселення → 409', async () => {
+    const { room, booking } = await prepare();
+    await checkIn(booking.id, { qrToken: room.qrToken, state: 'ok' });
+    assert.equal((await checkIn(booking.id, { qrToken: room.qrToken, state: 'ok' })).status, 409);
+  });
+
+  it('занадто рано (за 2 години до початку) → 409', async () => {
+    const { room, booking } = await prepare(120);
+    assert.equal((await checkIn(booking.id, { qrToken: room.qrToken, state: 'ok' })).status, 409);
+  });
+
+  it('чуже бронювання → 404', async () => {
+    const { room, booking } = await prepare();
+    assert.equal((await checkIn(booking.id, { qrToken: room.qrToken, state: 'ok' }, other.token)).status, 404);
+  });
+
+  it('у кімнаті вже є активне бронювання → 409', async () => {
+    const { room, booking } = await prepare();
+    await app.createBooking({ room, user: other, start: fromNow(-30), end: fromNow(5), status: 'active' });
+    assert.equal((await checkIn(booking.id, { qrToken: room.qrToken, state: 'ok' })).status, 409);
+  });
+
+  it('без стану огляду → 400, статус бронювання не змінюється (транзакція)', async () => {
+    const { room, booking } = await prepare();
+    assert.equal((await checkIn(booking.id, { qrToken: room.qrToken })).status, 400);
+    await booking.reload();
+    assert.equal(booking.status, 'created');
+  });
+
+  it('виселення: бронювання завершується, огляд і запис у журналі', async () => {
+    const { room, booking } = await prepare();
+    await checkIn(booking.id, { qrToken: room.qrToken, state: 'ok' });
+    const r = await checkOut(booking.id, { state: 'issues', note: 'Подряпина' });
+    assert.equal(r.status, 200);
+    assert.equal(r.data.booking.status, 'completed');
+    assert.equal(r.data.inspection.type, 'checkout');
+    const logEntry = await app.models.ActionLog.findOne({ where: { action: 'check_out', entityId: booking.id } });
+    assert.ok(logEntry);
+  });
+
+  it('виселення без поселення → 409', async () => {
+    const { booking } = await prepare();
+    assert.equal((await checkOut(booking.id, { state: 'ok' })).status, 409);
+  });
+});
+
+describe('правила створення бронювань', () => {
+  let app; let admin; let resident;
+  before(async () => {
+    app = await startTestApp({ maxActiveBookingsPerUser: 2 });
+    admin = await app.createUser({ role: 'admin' });
+    resident = await app.createUser();
+  });
+  after(() => app.close());
+
+  const book = (room, startIn, token = resident.token) => app.api('POST', '/api/bookings', {
+    token,
+    body: { roomId: room.id, startTime: fromNow(startIn).toISOString(), endTime: fromNow(startIn + 60).toISOString() },
+  });
+
+  it('початок у минулому → 400', async () => {
+    const room = await app.createRoom();
+    assert.equal((await book(room, -30)).status, 400);
+  });
+
+  it('тривалість менше 1 години → 400', async () => {
+    const room = await app.createRoom();
+    const r = await app.api('POST', '/api/bookings', {
+      token: admin.token,
+      body: { roomId: room.id, startTime: fromNow(60).toISOString(), endTime: fromNow(90).toISOString() },
+    });
+    assert.equal(r.status, 400);
+  });
+
+  it('не більше двох поточних і майбутніх бронювань мешканця (третє → 409)', async () => {
+    const room = await app.createRoom();
+    assert.equal((await book(room, 60)).status, 201);
+    assert.equal((await book(room, 180)).status, 201);
+    assert.equal((await book(room, 300)).status, 409);
+  });
+
+  it('обмеження не діє для адміністратора', async () => {
+    const room = await app.createRoom();
+    for (const startIn of [60, 180, 300]) {
+      assert.equal((await book(room, startIn, admin.token)).status, 201);
+    }
+  });
+
+  it('скасоване бронювання не враховується в обмеженні', async () => {
+    const user = await app.createUser();
+    const room = await app.createRoom();
+    const first = (await book(room, 60, user.token)).data;
+    await book(room, 180, user.token);
+    await app.api('PUT', `/api/bookings/${first.id}`, { token: user.token, body: { status: 'cancelled' } });
+    assert.equal((await book(room, 300, user.token)).status, 201);
+  });
+});
+
+describe('автоматична зміна статусів (планувальник)', () => {
+  let app; let resident;
+  before(async () => {
+    app = await startTestApp();
+    resident = await app.createUser();
+  });
+  after(() => app.close());
+
+  it('no-show скасовує, а час завершення завершує бронювання', async () => {
+    const room = await app.createRoom();
+    const late = await app.createBooking({ room, user: resident, start: fromNow(-120), end: fromNow(60) });
+    // Почалося 20 хвилин тому - вікно поселення ще відкрите
+    const fresh = await app.createBooking({ room, user: resident, start: fromNow(-20), end: fromNow(100) });
+    const finished = await app.createBooking({ room, user: resident, start: fromNow(-300), end: fromNow(-1), status: 'active' });
+
+    const result = await app.services.bookingJobs.updateBookingStatuses(new Date());
+    assert.deepEqual(result, { cancelled: 1, completed: 1 });
+
+    await Promise.all([late.reload(), fresh.reload(), finished.reload()]);
+    assert.equal(late.status, 'cancelled');
+    assert.equal(late.cancelReason, 'no-show');
+    assert.equal(fresh.status, 'created');
+    assert.equal(finished.status, 'completed');
+
+    const logEntry = await app.models.ActionLog.findOne({ where: { action: 'auto_cancel', entityId: late.id } });
+    assert.equal(logEntry.userId, null);
+  });
+});
+
+
+Файл test/measurements-processing.api.test.js
+'use strict';
+
+const { describe, it, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { startTestApp } = require('../testkit/harness');
+
+const MINUTE = 60 * 1000;
+
+describe('потокова обробка вимірювань', () => {
+  let app; let resident;
+  before(async () => {
+    app = await startTestApp();
+    resident = await app.createUser();
+  });
+  after(() => app.close());
+
+  const send = (room, at, extra = {}) => app.api('POST', '/api/measurements', {
+    headers: { 'X-Device-Key': room.deviceKey },
+    body: {
+      measuredAt: new Date(at).toISOString(), waterLevel: 90, illuminance: 300, temperature: 22, lightMode: 'off', ...extra,
+    },
+  });
+
+  describe('облік ресурсів активного бронювання та перевищення лімітів', () => {
+    let room; let booking; let t0;
+    before(async () => {
+      room = await app.createRoom({ waterLimit: 10, lightLimit: 0.2, tempMin: 18, tempMax: 26 });
+      const start = new Date(Date.now() - 10 * MINUTE);
+      booking = await app.createBooking({
+        room, user: resident, start, end: new Date(Date.now() + 60 * MINUTE), status: 'active',
+      });
+      t0 = start.getTime() + MINUTE;
+    });
+
+    it('перше вимірювання: витрата 0, стан normal, дозволені всі режими світла', async () => {
+      const r = await send(room, t0, { waterLevel: 90, lightMode: 'high' });
+      assert.equal(r.status, 201);
+      assert.equal(r.data.bookingId, booking.id);
+      assert.equal(r.data.state, 'normal');
+      assert.deepEqual(r.data.allowedLightModes, ['off', 'low', 'medium', 'high']);
+      assert.equal(r.data.usage.water.used, 0);
+      assert.equal(r.data.limits.waterLimit, 10);
+    });
+
+    it('друге вимірювання: вода 5 із 10, світло 0.2 із 0.2 - попередження, світло лише off', async () => {
+      const r = await send(room, t0 + 4 * MINUTE, { waterLevel: 85, lightMode: 'high' });
+      assert.equal(r.data.usage.water.used, 5);
+      assert.equal(r.data.usage.light.used, 0.2);
+      assert.equal(r.data.state, 'warning');
+      assert.deepEqual(r.data.allowedLightModes, ['off']);
+      assert.deepEqual(r.data.violations, []);
+    });
+
+    it('третє вимірювання: перевищено воду й світло, створено дві події', async () => {
+      const r = await send(room, t0 + 8 * MINUTE, { waterLevel: 78 });
+      assert.equal(r.data.state, 'violation');
+      assert.deepEqual(r.data.violations.map((v) => v.resource).sort(), ['light', 'water']);
+
+      await booking.reload();
+      assert.equal(booking.waterUsed, 12);
+      assert.equal(booking.lightUsed, 0.4);
+    });
+
+    it('до події додається шаблонне пояснення (у фоні)', async () => {
+      const violation = await app.waitFor(() => app.models.LimitViolation.findOne({
+        where: { bookingId: booking.id, resource: 'water' },
+      }).then((v) => (v && v.explanation ? v : null)));
+      assert.equal(violation.explanationSource, 'template');
+      assert.match(violation.explanation, /вода/);
+    });
+
+    it('подальше вимірювання не створює повторних подій', async () => {
+      const r = await send(room, t0 + 9 * MINUTE, { waterLevel: 70 });
+      assert.deepEqual(r.data.violations, []);
+      assert.equal(await app.models.LimitViolation.count({ where: { bookingId: booking.id } }), 2);
+    });
+
+    it('ресурсна панель кімнати показує останнє вимірювання та використання лімітів', async () => {
+      const r = await app.api('GET', `/api/rooms/${room.id}/resources`, { token: resident.token });
+      assert.equal(r.status, 200);
+      assert.equal(r.data.lastMeasurement.waterLevel, 70);
+      assert.equal(r.data.activeBookingId, booking.id);
+      assert.equal(r.data.usage.water.used, 20);
+      assert.equal(r.data.usage.water.left, 0);
+      assert.equal(r.data.state, 'violation');
+    });
+  });
+
+  describe('температура без активного бронювання', () => {
+    it('подія створюється лише при виході за межі діапазону', async () => {
+      const room = await app.createRoom();
+      const base = Date.UTC(2031, 5, 1, 10);
+      const temps = [22, 30, 31, 22, 15];
+      const created = [];
+      for (let i = 0; i < temps.length; i += 1) {
+        const r = await send(room, base + i * MINUTE, { temperature: temps[i] });
+        created.push(r.data.violations.map((v) => v.resource));
+        assert.equal(r.data.bookingId, null);
+      }
+      assert.deepEqual(created, [[], ['temperature'], [], [], ['temperature']]);
+    });
+
+    it('без бронювання дозволено лише вимкнене світло', async () => {
+      const room = await app.createRoom();
+      const r = await send(room, Date.UTC(2031, 5, 2, 10));
+      assert.deepEqual(r.data.allowedLightModes, ['off']);
+      assert.equal(r.data.usage, null);
+    });
+  });
+
+  describe('перевірка вхідних даних', () => {
+    it('невідомий режим світла → 400', async () => {
+      const room = await app.createRoom();
+      assert.equal((await send(room, Date.UTC(2031, 5, 3, 10), { lightMode: 'disco' })).status, 400);
+    });
+  });
+});
+
+
+Файл test/admin.api.test.js
+'use strict';
+
+const { describe, it, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { startTestApp } = require('../testkit/harness');
+
+describe('функції адміністрування', () => {
+let app; let admin; let resident;
+before(async () => {
+app = await startTestApp();
+admin = await app.createUser({ role: 'admin' });
+resident = await app.createUser();
+});
+after(() => app.close());
+
+const put = (url, body, token = admin.token) => app.api('PUT', url, { token, body });
+const lastLog = async (entity, entityId) => (await app.api(
+'GET', `/api/action-logs?entity=${entity}&action=update`, { token: admin.token },
+)).data.items.find((entry) => entry.entityId === entityId);
+
+describe('керування користувачами та ролями', () => {
+it('зміна ролі записується в журнал із подробицями', async () => {
+const u = await app.createUser();
+const r = await put(`/api/users/${u.user.id}`, { role: 'admin' });
+assert.equal(r.status, 200);
+assert.equal(r.data.role, 'admin');
+assert.equal((await lastLog('User', u.user.id)).details, 'role: resident -> admin');
+});
+
+it('блокування записується в журнал', async () => {
+const u = await app.createUser();
+await put(`/api/users/${u.user.id}`, { isBlocked: true });
+assert.equal((await lastLog('User', u.user.id)).details, 'isBlocked: false -> true');
+});
+
+it('адміністратор не може заблокувати себе або зняти з себе роль (409)', async () => {
+assert.equal((await put(`/api/users/${admin.user.id}`, { isBlocked: true })).status, 409);
+assert.equal((await put(`/api/users/${admin.user.id}`, { role: 'resident' })).status, 409);
+});
+
+it('адміністратор не може видалити власний обліковий запис (409)', async () => {
+const r = await app.api('DELETE', `/api/users/${admin.user.id}`, { token: admin.token });
+assert.equal(r.status, 409);
+});
+});
+
+describe('редагування ресурсних лімітів кімнати', () => {
+it('нові ліміти зберігаються й записуються в журнал', async () => {
+const room = await app.createRoom();
+const r = await put(`/api/rooms/${room.id}`, { waterLimit: 20, lightLimit: 0.5 });
+assert.equal(r.data.waterLimit, 20);
+assert.equal((await lastLog('Room', room.id)).details, 'waterLimit: 100 -> 20; lightLimit: 100 -> 0.5');
+});
+
+it('мешканець змінювати ліміти не може (403)', async () => {
+const room = await app.createRoom();
+assert.equal((await put(`/api/rooms/${room.id}`, { waterLimit: 1 }, resident.token)).status, 403);
+});
+
+it('нова кімната без лімітів отримує значення із системних параметрів', async () => {
+const r = await app.api('POST', '/api/rooms', { token: admin.token, body: { name: app.unique('Нова') } });
+assert.equal(r.data.waterLimit, app.config.defaultWaterLimit);
+assert.equal(r.data.tempMax, app.config.defaultTempMax);
+});
+});
+
+describe('журнал дій', () => {
+it('нові записи першими', async () => {
+const r = await app.api('GET', '/api/action-logs?limit=5', { token: admin.token });
+assert.ok(r.data.items.length >= 2);
+assert.ok(r.data.items[0].id > r.data.items[1].id);
+});
+
+it('фільтр за періодом', async () => {
+const future = new Date(Date.now() + 3600 * 1000).toISOString();
+const r = await app.api('GET', `/api/action-logs?from=${future}`, { token: admin.token });
+assert.equal(r.data.total, 0);
+});
+});
+
+describe('системні параметри', () => {
+it('адміністратор бачить параметри без секретів', async () => {
+const r = await app.api('GET', '/api/admin/settings', { token: admin.token });
+assert.equal(r.status, 200);
+assert.equal(r.data.settings.maxBookingHours, 24);
+assert.equal(r.data.settings.jwtSecret, undefined);
+assert.equal(r.data.settings.llmApiKey, undefined);
+assert.equal(r.data.llmConfigured, false);
+});
+
+it('мешканцю недоступні (403)', async () => {
+assert.equal((await app.api('GET', '/api/admin/settings', { token: resident.token })).status, 403);
+});
+});
+
+describe('моніторинг активності', () => {
+it('адміністратор бачить лічильники користувачів, бронювань і заявок', async () => {
+const room = await app.createRoom();
+const inHours = (h) => new Date(Date.now() + h * 3600 * 1000);
+await app.createBooking({ room, user: resident, start: inHours(1), end: inHours(2) });
+const r = await app.api('GET', '/api/admin/stats', { token: admin.token });
+assert.equal(r.status, 200);
+assert.equal(r.data.users.total, await app.models.User.count());
+assert.ok(r.data.users.admin >= 1);
+assert.ok(r.data.bookings.created >= 1);
+assert.equal(typeof r.data.serviceRequests.new, 'number');
+assert.ok(r.data.last24h.actions >= 1);
+});
+
+it('показує останні перевищення лімітів, нові першими', async () => {
+const room = await app.createRoom();
+const violation = (resource, detectedAt) => app.models.LimitViolation.create({
+roomId: room.id, resource, limitValue: 20, actualValue: 30, detectedAt,
+});
+const older = await violation('water', new Date(Date.now() - 60 * 1000));
+const newer = await violation('temperature', new Date());
+const r = await app.api('GET', '/api/admin/stats', { token: admin.token });
+assert.deepEqual(r.data.recentViolations.slice(0, 2).map((v) => v.id), [newer.id, older.id]);
+assert.ok(r.data.recentViolations.length <= 5);
+});
+
+it('мешканцю недоступний (403)', async () => {
+assert.equal((await app.api('GET', '/api/admin/stats', { token: resident.token })).status, 403);
+});
+});
+});
+
+describe('сервісні заявки: статуси та фото', () => {
+let app; let admin; let resident; let other; let room;
+before(async () => {
+app = await startTestApp();
+admin = await app.createUser({ role: 'admin' });
+resident = await app.createUser();
+other = await app.createUser();
+room = await app.createRoom();
+});
+after(() => app.close());
+
+const createRequest = async () => (await app.api('POST', '/api/service-requests', {
+token: resident.token, body: { roomId: room.id, description: 'Не працює лампа' },
+})).data;
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const upload = (id, token, type = 'image/png', body = PNG) => app.api('POST', `/api/service-requests/${id}/photo`, {
+token, headers: { 'Content-Type': type }, rawBody: body,
+});
+
+it('повернення статусу resolved → in_progress заборонене (409)', async () => {
+const request = await createRequest();
+const url = `/api/service-requests/${request.id}`;
+await app.api('PUT', url, { token: admin.token, body: { status: 'resolved' } });
+const r = await app.api('PUT', url, { token: admin.token, body: { status: 'in_progress' } });
+assert.equal(r.status, 409);
+});
+
+it('автор завантажує фото, воно доступне за photoUrl', async () => {
+const request = await createRequest();
+const r = await upload(request.id, resident.token);
+assert.equal(r.status, 200);
+assert.match(r.data.photoUrl, /^\/uploads\/request-\d+-.+\.png$/);
+
+const photo = await fetch(app.base + r.data.photoUrl);
+assert.equal(photo.status, 200);
+assert.equal(Buffer.from(await photo.arrayBuffer()).length, PNG.length);
+});
+
+it('не зображення → 400', async () => {
+const request = await createRequest();
+assert.equal((await upload(request.id, resident.token, 'text/plain', 'hello')).status, 400);
+});
+
+it('фото до чужої заявки → 404', async () => {
+const request = await createRequest();
+assert.equal((await upload(request.id, other.token)).status, 404);
+});
+});
+
+ДОДАТОК Е
+UML-діаграма діяльності
+
+Рисунок Е.1 - UML-діаграма діяльності бізнес-процесу використання кімнати (рисунок виконано самостійно)
+ДОДАТОК Ж
+UML-діаграми взаємодії
+
+Рисунок Ж.1 - UML-діаграма послідовності обробки вимірювання з перевищенням ліміту (рисунок виконано самостійно)
+
+
+Рисунок Ж.2 - UML-діаграма послідовності зміни ролі користувача адміністратором (рисунок виконано самостійно)
